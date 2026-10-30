@@ -1,15 +1,20 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUpDown, Info, Loader2, Umbrella } from 'lucide-react'
+import { ArrowUpDown, Info, Loader2, Play } from 'lucide-react'
 
-import SearchBar from '@/components/SearchBar'
+import DriveMode from '@/components/DriveMode'
 import RoutePanel from '@/components/RoutePanel'
+import RouteResultCard from '@/components/RouteResultCard'
+import SearchBar from '@/components/SearchBar'
+import WeatherCanvas from '@/components/WeatherCanvas'
 import WeatherPanel from '@/components/WeatherPanel'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { api, errorMessage } from '@/lib/api'
 import { avoidTypesFor, rainLevel } from '@/lib/level'
+import { useIsWide } from '@/lib/media'
+import { currentTimeOfDay, weatherScene, type TimeOfDay } from '@/lib/scene'
+import { dummyNotice } from '@/lib/zones'
 import type {
-  Alert, AppConfig, Place, RouteRequestBody, RouteResult, StrategyInfo, WeatherInfo, ZoneFeatureCollection,
+  Alert, AppConfig, GuidanceStep, Place, RouteRequestBody, RouteResult, StrategyInfo, WeatherInfo, ZoneFeatureCollection,
 } from '@/lib/types'
 
 import './App.css'
@@ -22,6 +27,9 @@ interface WeatherChoice {
   rain: number
   alert: Alert
 }
+
+const DEMO_ROUTE = { origin: '광주송정역', destination: '광주역' }
+const CLOCK_CHECK_MS = 5 * 60 * 1000
 
 function App() {
   const [config, setConfig] = useState<AppConfig | null>(null)
@@ -44,6 +52,16 @@ function App() {
   const abortRef = useRef<AbortController | null>(null)
   // Level of the latest request; null until the first route is requested.
   const requestedLevel = useRef<number | null>(null)
+  const isWide = useIsWide()
+  const [clockTime, setClockTime] = useState<TimeOfDay>(() => currentTimeOfDay())
+  const [timeChoice, setTimeChoice] = useState<TimeOfDay | null>(null)
+  const [driveSteps, setDriveSteps] = useState<GuidanceStep[] | null>(null)
+  const [startingDrive, setStartingDrive] = useState(false)
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockTime(currentTimeOfDay()), CLOCK_CHECK_MS)
+    return () => window.clearInterval(timer)
+  }, [])
 
   useEffect(() => {
     Promise.all([api.appConfig(), api.strategies(), api.riskZones(), api.demoPoints()])
@@ -83,8 +101,8 @@ function App() {
     setRouteError('')
   }
 
-  async function runRoute(next: WeatherChoice) {
-    if (!origin || !destination || !strategy) return
+  async function runRoute(next: WeatherChoice, from = origin, to = destination) {
+    if (!from || !to || !strategy) return
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
@@ -93,8 +111,8 @@ function App() {
     setRouteError('')
     setResult(null)  // requirement 6.8: clear the previous route first
     const body: RouteRequestBody = {
-      origin: { lon: origin.lon, lat: origin.lat },
-      destination: { lon: destination.lon, lat: destination.lat },
+      origin: { lon: from.lon, lat: from.lat },
+      destination: { lon: to.lon, lat: to.lat },
       strategy,
       weather_override: next.demoMode ? { rn1_mm: next.rain, alert: next.alert } : null,
     }
@@ -143,55 +161,79 @@ function App() {
   }, [result, config, choice, weather])
 
   const alternatives = useMemo(() => result?.alternatives.map(a => a.geometry) ?? [], [result])
+  const passedZoneIds = useMemo(() => result?.explanation.passed_zones.map(z => z.id) ?? [], [result])
   const checkedAt = zones?.metadata.data_checked_at ?? '-'
 
+  const sceneRain = choice.demoMode ? choice.rain : (weather?.available ? weather.rn1_mm ?? 0 : 0)
+  const sceneLevel = levelFor(choice)
+  const sceneTime = timeChoice ?? clockTime
+  const scene = useMemo(() => weatherScene(sceneRain, sceneLevel, sceneTime), [sceneRain, sceneLevel, sceneTime])
+  const demoOrigin = demoPoints.find(p => p.name === DEMO_ROUTE.origin)
+  const demoDestination = demoPoints.find(p => p.name === DEMO_ROUTE.destination)
+
+  function startDemo() {
+    if (!demoOrigin || !demoDestination) return
+    const next = { ...choice, demoMode: true }
+    setOrigin(demoOrigin)
+    setDestination(demoDestination)
+    setChoice(next)
+    void runRoute(next, demoOrigin, demoDestination)
+  }
+
+  async function startDrive() {
+    if (!result) return
+    setStartingDrive(true)
+    try {
+      const { steps } = await api.guidance(result.route.geometry.coordinates)
+      setDriveSteps(steps)
+    } catch {
+      // Guidance is an extra on top of the route: drive with the route line alone.
+      setDriveSteps([])
+    } finally {
+      setStartingDrive(false)
+    }
+  }
+
+  if (result && driveSteps) {
+    return <DriveMode result={result} steps={driveSteps} scene={scene} zones={zones} destination={destination}
+      onExit={() => setDriveSteps(null)} />
+  }
+
+  const resultCard = result && (
+    <RouteResultCard config={config} result={result} showBaseline={showBaseline}
+      onShowBaselineChange={setShowBaseline} starting={startingDrive} onStartDrive={() => void startDrive()} />
+  )
+
   return (
-    <div className="app-shell flex h-dvh flex-col overflow-hidden bg-background text-foreground lg:flex-row-reverse">
-      <div className="relative h-[45vh] shrink-0 lg:h-full lg:flex-1">
+    <div className="app-shell dark flex h-dvh flex-col gap-3 overflow-hidden p-0 text-foreground lg:flex-row-reverse lg:p-3">
+      <div className="scene" aria-hidden="true"><WeatherCanvas spec={scene} variant="page" /></div>
+
+      <div className="map-frame relative h-[45vh] shrink-0 lg:h-full lg:flex-1">
         <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">
           <Loader2 className="mr-2 size-4 animate-spin" />지도를 불러오는 중</div>}>
           <MapView zones={zones} zoneTypes={config?.zone_types ?? null} highlightTypes={highlightTypes}
+            passedZoneIds={passedZoneIds} floatingCard={isWide && Boolean(result)}
             route={result?.route.geometry ?? null} baseline={result?.baseline.geometry ?? null}
             alternatives={alternatives} showBaseline={showBaseline} origin={origin} destination={destination} />
         </Suspense>
+        {/* The tint stays light: the route and zones underneath must remain readable in any weather. */}
+        <div className="map-weather" style={{ backgroundColor: `rgb(6 10 20 / ${scene.mapTint})` }} aria-hidden="true">
+          <WeatherCanvas spec={scene} variant="map" />
+        </div>
+        {isWide && resultCard && <div className="result-float glass-card">{resultCard}</div>}
       </div>
 
-      <aside className="min-h-0 flex-1 overflow-y-auto border-t lg:w-[400px] lg:flex-none lg:border-t-0 lg:border-r">
-        <div className="space-y-5 p-4">
-          <header className="space-y-2">
-            <h1 className="flex items-center gap-2 text-lg font-bold">
-              <Umbrella className="size-5 text-blue-600" />호우 안전 경로 · 광주
-            </h1>
-            <p className="text-xs text-muted-foreground">
-              비가 많이 올수록 지하차도 → 침수 이력 도로 → 하천변을 단계적으로 피하는 자동차 경로입니다.
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {zones?.metadata.has_dummy && (
-                <Badge variant="outline" className="border-orange-400 text-orange-700">위험 구역: 더미 데이터</Badge>
-              )}
-              {config?.search_mode === 'demo' && <Badge variant="secondary">데모 지점 검색</Badge>}
-            </div>
-          </header>
-
+      <aside className="relative min-h-0 flex-1 overflow-y-auto lg:w-[400px] lg:flex-none">
+        <div className="space-y-3 p-3 lg:p-0 lg:pr-1">
           {loadError && (
             <p role="alert" className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
               {loadError}
             </p>
           )}
 
-          <section className="space-y-3" aria-label="출발지와 목적지">
-            <SearchBar id="origin" label="출발지" value={origin} onChange={pick(setOrigin)} demoPoints={demoPoints}
-              bbox={config?.service_area_bbox ?? null} allowCurrentLocation />
-            <div className="flex justify-center">
-              <Button type="button" variant="ghost" size="sm" onClick={swap} disabled={!origin && !destination}>
-                <ArrowUpDown />출발·목적지 바꾸기
-              </Button>
-            </div>
-            <SearchBar id="destination" label="목적지" value={destination} onChange={pick(setDestination)}
-              demoPoints={demoPoints} bbox={config?.service_area_bbox ?? null} />
-          </section>
-
-          <WeatherPanel config={config} weather={weather} loading={weatherLoading} demoMode={choice.demoMode}
+          <WeatherPanel config={config} weather={weather} loading={weatherLoading} scene={scene} rainShown={sceneRain}
+            dummyZonesNotice={dummyNotice(zones, config?.zone_types)} timeChoice={timeChoice} onTimeChoiceChange={setTimeChoice}
+            demoMode={choice.demoMode}
             onDemoModeChange={on => updateChoice({ ...choice, demoMode: on }, true)}
             rain={choice.rain}
             onRainChange={rain => setChoice(c => ({ ...c, rain }))}
@@ -199,19 +241,41 @@ function App() {
             alert={choice.alert}
             onAlertChange={alert => updateChoice({ ...choice, alert }, true)} />
 
-          <RoutePanel config={config} strategies={strategies} strategy={strategy} onStrategyChange={setStrategy}
-            canSubmit={Boolean(origin && destination && strategy)} busy={busy}
-            onSubmit={() => void runRoute(choice)} result={result} error={routeError}
-            showBaseline={showBaseline} onShowBaselineChange={setShowBaseline} />
+          <div className="glass-card space-y-3">
+            {demoOrigin && demoDestination && (
+              <Button type="button" variant="secondary" className="w-full" disabled={busy} onClick={startDemo}>
+                <Play />시연 경로 보기 · {DEMO_ROUTE.origin} → {DEMO_ROUTE.destination}
+              </Button>
+            )}
+            <section className="relative space-y-2" aria-label="출발지와 목적지">
+              <Button type="button" variant="ghost" size="icon-sm" className="absolute top-0 right-0 z-10"
+                aria-label="출발·목적지 바꾸기" title="출발·목적지 바꾸기" onClick={swap} disabled={!origin && !destination}>
+                <ArrowUpDown />
+              </Button>
+              <SearchBar id="origin" label="출발지" value={origin} onChange={pick(setOrigin)} demoPoints={demoPoints}
+                bbox={config?.service_area_bbox ?? null} allowCurrentLocation />
+              <SearchBar id="destination" label="목적지" value={destination} onChange={pick(setDestination)}
+                demoPoints={demoPoints} bbox={config?.service_area_bbox ?? null} />
+            </section>
 
-          <footer className="space-y-1.5 rounded-lg bg-muted/60 p-3 text-xs leading-5" role="note">
+            <RoutePanel strategies={strategies} strategy={strategy} onStrategyChange={setStrategy}
+              canSubmit={Boolean(origin && destination && strategy)} busy={busy}
+              onSubmit={() => void runRoute(choice)} error={routeError} />
+          </div>
+
+          {!isWide && resultCard && <div className="glass-card">{resultCard}</div>}
+
+          <footer className="glass-card space-y-1.5 text-xs leading-5" role="note">
+            <p className="text-muted-foreground">
+              비가 많이 올수록 지하차도 → 침수 이력 도로 → 하천변을 단계적으로 피하는 자동차 경로입니다.
+            </p>
             <p className="flex gap-1.5 font-medium">
               <Info className="mt-0.5 size-3.5 shrink-0" />
               이 서비스는 실제 도로 통제와 침수 여부를 확인하지 않습니다. 지하차도 통제, 재난문자, 경찰·지자체 안내를 먼저 따르세요.
             </p>
             <p className="text-muted-foreground">
               실시간 교통을 반영하지 않습니다. 위험 구역 데이터 기준일 {checkedAt}
-              {zones?.metadata.has_dummy ? ' · 더미 데이터 — 실제 자료 아님' : ''}.
+              {dummyNotice(zones, config?.zone_types) ? ` · ${dummyNotice(zones, config?.zone_types)}` : ''}.
             </p>
             <p className="text-muted-foreground">
               출발지·목적지와 검색어는 서버에 저장하지 않습니다. 지도 타일은 OpenFreeMap에서 받습니다.

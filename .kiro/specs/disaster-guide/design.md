@@ -438,7 +438,9 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 | `VALHALLA_CONFIG` | Valhalla 설정 경로 | `.local-data/valhalla/valhalla.json` |
 | `ROUTING_TIMEOUT_S` | 경로 요청 시간 제한 | 10 |
 
-키는 실행하는 PowerShell 창에서 `$env:KAKAO_REST_API_KEY = '...'`로 넣는다. 파일·저장소·프론트에 넣지 않는다.
+키는 로컬에서는 프로젝트 루트의 `.env`(Git 제외, `.env.example` 참고)나 실행하는 PowerShell 창의 `$env:KAKAO_REST_API_KEY = '...'`로 넣는다. 창의 값이 우선한다. 저장소·배포물·프론트에 넣지 않는다.
+
+`KMA_SERVICE_KEY`는 공공데이터포털 키와 기상청 API허브 키를 모두 받는다. API허브 키(22자)면 `apihub.kma.go.kr`의 `authKey`로, 그 외에는 `apis.data.go.kr`의 `serviceKey`로 호출한다. 특보는 API허브에서 `wrn_now_data.php`(발효 중인 특보 목록)를 쓴다. 등급은 `주의`·`경보`만 인정하고 `예비`는 뺀다. 광주는 `REG_ID`나 `REG_UP`의 광주 코드로 찾고, 경기 광주시(`L1013400`)는 제외한다. 실황은 매시 정각 자료를 먼저 요청하고, 아직 없으면 이전 시각 자료를 쓴다.
 
 ## 12. 로컬 실행
 
@@ -448,6 +450,13 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
   - 끝나면 환경변수를 원래대로 돌린다.
 - 프론트: 기존 `scripts/dev-frontend.ps1`
 - 새 Python 패키지는 `backend/requirements.team.txt`에 적었다. 두 잠금 파일은 바꾸지 않는다.
+
+### 12.1 운행 화면 (시연 주행)
+
+- `안내 시작`을 누르면 선택된 경로로 `POST /api/route/guidance`를 호출해 회전 안내를 받고 전체 화면 운행 모드로 들어간다. 좌표는 본문으로만 보내고 저장하거나 로그에 남기지 않는다.
+- 회전 안내는 Valhalla `trace_route`에 `format: json`, `directions_type: maneuvers`로 받는다. Windows에서 OSRM 형식은 도로명 인코딩 오류가 나기 때문이다. `POST /api/route`는 그대로 `directions_type: none`을 쓴다.
+- 안내를 받지 못해도 경로선만으로 주행을 계속한다.
+- 차량 위치는 **실제 GPS가 아니라 시연 주행**이다. 경로를 따라 구간별 예상 속도로 움직이고 화면에 시연임을 표시한다. 아직 없는 것: 실제 위치 추적, 경로 이탈 재탐색, 차선·카메라 안내, 음성 안내.
 
 ## 13. 오류 처리 요약
 

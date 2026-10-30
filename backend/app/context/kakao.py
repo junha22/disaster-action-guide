@@ -22,6 +22,10 @@ SIZE = 10
 TIMEOUT_S = 5.0
 DEMO_PATH = Path(__file__).resolve().parents[1] / "data" / "demo_points.json"
 OUTSIDE = "데모 지역 밖"
+# Kakao now reports Gwangju under the merged region name, which also covers the former Jeonnam.
+# Only these five districts are the former Gwangju, the service area.
+MERGED_REGION = "전남광주통합특별시"
+GWANGJU_DISTRICTS = frozenset({"동구", "서구", "남구", "북구", "광산구"})
 NOTICE_NO_KEY = "카카오 API 키가 설정되지 않아 데모 지점 목록을 보여줍니다."
 NOTICE_FAILED = "장소 검색(카카오)에 연결하지 못해 데모 지점 목록을 보여줍니다."
 
@@ -60,11 +64,15 @@ def demo_results(query: str) -> list[Place]:
 
 
 def _is_gwangju(region_1depth: str | None, address: str | None, lon: float, lat: float) -> bool:
-    first = region_1depth or (address.split()[0] if address and address.split() else "")
-    # Kakao may return the short name (광주), the former full name
-    # (광주광역시), or the current full administrative name. Coordinates
-    # still provide the strict boundary check that excludes 경기 광주시.
-    return "광주" in first and in_service_area(lon, lat)
+    # Kakao may return the short name (광주), the former full name (광주광역시), or the current merged
+    # name. Coordinates alone are not enough: the search box also covers parts of the former Jeonnam.
+    parts = (address or "").split()
+    first = region_1depth or (parts[0] if parts else "")
+    if first == MERGED_REGION:
+        in_gwangju = len(parts) > 1 and parts[1] in GWANGJU_DISTRICTS
+    else:
+        in_gwangju = first in ("광주", "광주광역시")
+    return in_gwangju and in_service_area(lon, lat)
 
 
 def _place(pid: str, name: str, address: str, x: Any, y: Any, region: str | None) -> Place | None:
@@ -80,7 +88,8 @@ def parse_keyword(payload: Any) -> list[Place]:
     places = []
     for d in (payload or {}).get("documents", [])[:SIZE]:
         address = d.get("road_address_name") or d.get("address_name") or ""
-        # address_name is the lot address and always starts with the province ("광주 북구 ...").
+        # address_name is the lot address and always starts with the region ("광주 북구 ...",
+        # "전남광주통합특별시 북구 ...").
         p = _place(f"kakao-{d.get('id', len(places))}", d.get("place_name", ""), address, d.get("x"), d.get("y"),
                    (d.get("address_name") or "").split()[0] if d.get("address_name") else None)
         if p:

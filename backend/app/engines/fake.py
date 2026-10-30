@@ -5,7 +5,7 @@ from typing import Callable, Sequence
 from shapely.geometry import LineString, Polygon
 
 from ..risk.geo import to_metric
-from .base import (EngineError, ExcludeLimits, LonLat, NoRouteFound, OsrmRoute, Ring,
+from .base import (EngineError, ExcludeLimits, GuidanceStep, LonLat, NoRouteFound, OsrmRoute, Ring,
                    osrm_route)
 
 
@@ -28,6 +28,14 @@ class FakeEngine:
 
     def exclude_limits(self) -> ExcludeLimits:
         return self.limits
+
+    def guidance(self, coordinates: Sequence[LonLat], *, timeout_s: float = 10.0) -> list[GuidanceStep]:
+        error = self.error({"coordinates": list(coordinates)}) if callable(self.error) else self.error
+        if error is not None:
+            raise error
+        distance = to_metric(LineString(coordinates)).length
+        return [{"kind": "depart", "name": "테스트로", "distance_m": distance, "duration_s": distance / 10.0},
+                {"kind": "arrive", "name": "", "distance_m": 0.0, "duration_s": 0.0}]
 
     def route(self, origin: LonLat, destination: LonLat, *, exclude_polygons: Sequence[Ring] = (),
               alternates: int = 0, timeout_s: float = 10.0) -> list[OsrmRoute]:

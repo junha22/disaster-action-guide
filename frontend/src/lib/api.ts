@@ -1,6 +1,6 @@
 // All calls use relative /api/ paths. Coordinates and search terms go in POST bodies only.
 import type {
-  AppConfig, Place, RouteRequestBody, RouteResult, SearchResult, StrategyInfo, WeatherInfo,
+  AppConfig, GuidanceStep, LonLat, Place, RouteRequestBody, RouteResult, SearchResult, StrategyInfo, WeatherInfo,
   ZoneFeatureCollection,
 } from './types'
 
@@ -45,6 +45,7 @@ export const api = {
   weather: () => request<WeatherInfo>('/api/weather'),
   search: (query: string) => post<SearchResult>('/api/search', { query }),
   route: (body: RouteRequestBody, signal?: AbortSignal) => post<RouteResult>('/api/route', body, signal),
+  guidance: (coordinates: LonLat[]) => post<{ steps: GuidanceStep[] }>('/api/route/guidance', { coordinates }),
 }
 
 export function errorMessage(error: unknown, fallback: string): string {

@@ -34,6 +34,19 @@ def clear_overrides():
     app.dependency_overrides.clear()
 
 
+@pytest.mark.parametrize("address, x, y, selectable", [
+    ("전남광주통합특별시 북구 무등로 235", "126.909", "35.165", True),
+    ("전남광주통합특별시 광산구 상무대로 201", "126.793", "35.137", True),
+    ("전남광주통합특별시 나주시 빛가람로 1", "126.79", "35.02", False),
+    # Inside the search box, but a former Jeonnam county rather than a Gwangju district.
+    ("전남광주통합특별시 담양군 담양읍 1", "126.98", "35.24", False),
+])
+def test_merged_region_name_counts_only_former_gwangju_districts(address, x, y, selectable):
+    document = {"id": "1", "place_name": "장소", "address_name": address, "road_address_name": address, "x": x, "y": y}
+    svc, _ = kakao_service(lambda r: httpx.Response(200, json={"documents": [document]}))
+    assert svc.search("장소")["items"][0]["selectable"] is selectable
+
+
 def test_keyword_results_mark_outside_gwangju_and_send_only_query_and_box():
     svc, calls = kakao_service(lambda r: httpx.Response(200, json={"documents": [GWANGJU, GYEONGGI]}))
     result = svc.search("광주역")

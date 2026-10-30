@@ -68,11 +68,103 @@ def test_observation_request_uses_gwangju_grid_and_decoded_key():
     assert s.observed_at == "2026-10-30T18:00:00+09:00"
 
 
-@pytest.mark.parametrize("hour, minute, expected", [(18, 39, "2026-10-30 17:00"), (18, 40, "2026-10-30 18:00"),
-                                                    (0, 5, "2026-10-29 23:00")])
-def test_observation_time(hour, minute, expected):
-    t = kma.observation_time(datetime(2026, 10, 30, hour, minute, tzinfo=kma.KST))
-    assert t.strftime("%Y-%m-%d %H:%M") == expected
+HUB_KEY = "Abc_123-defGHIjklMNOpq"
+# Shapes copied from real wrn_now_data responses, fields space-padded as the API sends them.
+GWANGJU_2025_WARNING = {"REG_UP": "L1130000", "REG_ID": "L1050100", "REG_KO": "광주광역시    ", "WRN": "호우  ", "LVL": "경보    ", "CMD": "변경"}
+GWANGJU_2026_ADVISORY = {"REG_UP": "L1130100", "REG_ID": "L1130110", "REG_KO": "광주서부   ", "WRN": "호우  ", "LVL": "주의    ", "CMD": "발표"}
+GWANGJU_PRELIMINARY = {"REG_UP": "L1130100", "REG_ID": "L1130120", "REG_KO": "광주동부   ", "WRN": "호우  ", "LVL": "예비    ", "CMD": "발표"}
+GWANGJU_HEAT = {"REG_UP": "L1130100", "REG_ID": "L1130110", "REG_KO": "광주서부   ", "WRN": "폭염  ", "LVL": "경보    ", "CMD": "발표"}
+GYEONGGI_GWANGJU = {"REG_UP": "L1010000", "REG_ID": "L1013400", "REG_KO": "광주시    ", "WRN": "호우  ", "LVL": "경보    ", "CMD": "발표"}
+JEONNAM_WARNING = {"REG_UP": "L1050000", "REG_ID": "L1051200", "REG_KO": "순천시    ", "WRN": "호우  ", "LVL": "경보    ", "CMD": "변경"}
+
+
+def hub_handler(alerts):
+    def handler(request):
+        if request.url.path.endswith("getUltraSrtNcst"):
+            return httpx.Response(200, json=ncst())
+        return httpx.Response(200, json=alerts)
+    return handler
+
+
+def test_api_hub_key_uses_the_hub_host_and_auth_param():
+    svc, calls = service(hub_handler([]), key=HUB_KEY)
+    s = svc.get()
+    assert s.available and s.alert == "none" and s.alert_status == "ok"
+    assert [c.url.host for c in calls] == ["apihub.kma.go.kr", "apihub.kma.go.kr"]
+    assert all(c.url.params["authKey"] == HUB_KEY and "serviceKey" not in c.url.params for c in calls)
+    assert calls[1].url.path.endswith("wrn_now_data.php")
+    assert (calls[1].url.params["fe"], calls[1].url.params["tm"]) == ("f", "202610301845")
+
+
+@pytest.mark.parametrize("items, expected", [
+    ([], "none"),
+    ([GWANGJU_2025_WARNING], "warning"),
+    ([GWANGJU_2026_ADVISORY], "advisory"),
+    ([GWANGJU_2026_ADVISORY, GWANGJU_2025_WARNING], "warning"),
+    ([GWANGJU_PRELIMINARY], "none"),
+    ([GWANGJU_HEAT], "none"),
+    ([GYEONGGI_GWANGJU, JEONNAM_WARNING], "none"),
+    ([{**GWANGJU_2025_WARNING, "CMD": "해제"}], "none"),
+])
+def test_hub_alert_counts_only_heavy_rain_in_effect_in_gwangju(items, expected):
+    assert kma.parse_hub_alert(items)[0] == expected
+
+
+@pytest.mark.parametrize("response", [
+    httpx.Response(200, text="2005년 7월 1일부터 조회 가능합니다."),
+    httpx.Response(200, json={"result": {"status": 403}}),
+    httpx.Response(403, json={"result": {"status": 403}}),
+])
+def test_hub_alert_errors_are_reported_not_read_as_no_alert(response):
+    def handler(request):
+        return httpx.Response(200, json=ncst()) if request.url.path.endswith("getUltraSrtNcst") else response
+    s = service(handler, key=HUB_KEY)[0].get()
+    assert s.available and s.alert_status == "failed" and s.alert_label == "특보 확인 실패"
+
+
+def test_newest_hour_is_tried_first_then_the_previous_one():
+    now = datetime(2026, 10, 30, 18, 5, tzinfo=kma.KST)
+
+    def handler(request):
+        if request.url.params.get("base_time") == "1800":
+            return httpx.Response(200, json=ncst(code="03"))
+        return httpx.Response(200, json=ncst()) if request.url.path.endswith("getUltraSrtNcst") else httpx.Response(200, json=warn([]))
+    svc, calls = service(handler, now=now)
+    s = svc.get()
+    assert [c.url.params["base_time"] for c in calls[:2]] == ["1800", "1700"]
+    assert s.available and s.observed_at == "2026-10-30T17:00:00+09:00"
+
+
+def test_no_published_hour_means_unavailable():
+    svc, _ = service(lambda request: httpx.Response(200, json=ncst(code="03")))
+    assert not svc.get().available
+
+
+def test_portal_key_stays_on_the_portal_host():
+    svc, calls = service(ok_handler(), key="a" * 64)
+    assert svc.get().available
+    assert [c.url.host for c in calls] == ["apis.data.go.kr", "apis.data.go.kr"]
+    assert all(c.url.params["serviceKey"] == "a" * 64 and "authKey" not in c.url.params for c in calls)
+
+
+def test_hub_rejecting_the_alert_api_keeps_rainfall_and_reports_the_alert_failure():
+    def handler(request):
+        if request.url.path.endswith("getUltraSrtNcst"):
+            return httpx.Response(200, json=ncst())
+        return httpx.Response(403, json={"result": {"status": 403, "message": "허용되지 않은 API 입니다."}})
+    svc, _ = service(handler, key="Abc_123-defGHIjklMNOpq")
+    s = svc.get()
+    assert s.available and s.rn1_mm == 12.5
+    assert s.alert_status == "failed" and s.alert_label == "특보 확인 실패"
+
+
+@pytest.mark.parametrize("hour, minute, newest, previous", [
+    (18, 39, "2026-10-30 18:00", "2026-10-30 17:00"),
+    (0, 5, "2026-10-30 00:00", "2026-10-29 23:00"),
+])
+def test_observation_hours(hour, minute, newest, previous):
+    hours = kma.observation_hours(datetime(2026, 10, 30, hour, minute, tzinfo=kma.KST))
+    assert [t.strftime("%Y-%m-%d %H:%M") for t in hours] == [newest, previous]
 
 
 def test_results_are_cached_for_ten_minutes():

@@ -1,11 +1,16 @@
 import { useEffect } from 'react'
-import { Popup, type MapLibreMap, type MapLayerMouseEvent } from 'maplibre-gl'
+import { Popup, type ExpressionSpecification, type MapLibreMap, type MapLayerMouseEvent } from 'maplibre-gl'
 
+import { dummyNotice, zoneCenter } from '@/lib/zones'
 import type { AppConfig, ZoneFeatureCollection, ZoneProperties, ZoneType } from '@/lib/types'
 
 const SOURCE = 'risk-zones'
 const FILL = 'risk-zones-fill'
 const OUTLINE = 'risk-zones-outline'
+const DOT_SOURCE = 'risk-zones-dots'
+const DOTS = 'risk-zones-dots'
+// Most zones are too small to see when the whole city is in view, so they also get a dot until this zoom.
+const DOT_MAX_ZOOM = 14.5
 const EMPTY = { type: 'FeatureCollection' as const, features: [] }
 // Route layers are added by MapView first; zones go underneath them.
 const BELOW = 'route-alternatives'
@@ -15,6 +20,18 @@ interface Props {
   zones: ZoneFeatureCollection | null
   zoneTypes: AppConfig['zone_types']
   highlightTypes: ZoneType[]
+  passedZoneIds: string[]
+}
+
+function zoneDots(zones: ZoneFeatureCollection) {
+  return {
+    type: 'FeatureCollection' as const,
+    features: zones.features.map(feature => ({
+      type: 'Feature' as const,
+      properties: feature.properties,
+      geometry: { type: 'Point' as const, coordinates: zoneCenter(feature.geometry) },
+    })),
+  }
 }
 
 function popupContent(p: ZoneProperties, typeLabel: string): HTMLElement {
@@ -47,13 +64,19 @@ function popupContent(p: ZoneProperties, typeLabel: string): HTMLElement {
   return root
 }
 
-export default function RiskLayer({ map, zones, zoneTypes, highlightTypes }: Props) {
+export default function RiskLayer({ map, zones, zoneTypes, highlightTypes, passedZoneIds }: Props) {
+  const notice = dummyNotice(zones, zoneTypes)
   useEffect(() => {
     if (!map.getSource(SOURCE)) {
       map.addSource(SOURCE, { type: 'geojson', data: EMPTY })
+      map.addSource(DOT_SOURCE, { type: 'geojson', data: EMPTY })
       const before = map.getLayer(BELOW) ? BELOW : undefined
       map.addLayer({ id: FILL, type: 'fill', source: SOURCE }, before)
       map.addLayer({ id: OUTLINE, type: 'line', source: SOURCE, paint: { 'line-width': 1.5 } }, before)
+      map.addLayer({
+        id: DOTS, type: 'circle', source: DOT_SOURCE, maxzoom: DOT_MAX_ZOOM,
+        paint: { 'circle-stroke-color': '#ffffff' },
+      })
     }
     const colors: ['match', ['get', string], string, string, string, string, string, string, string] = [
       'match', ['get', 'type'],
@@ -63,6 +86,7 @@ export default function RiskLayer({ map, zones, zoneTypes, highlightTypes }: Pro
       '#6b7280']
     map.setPaintProperty(FILL, 'fill-color', colors)
     map.setPaintProperty(OUTLINE, 'line-color', colors)
+    map.setPaintProperty(DOTS, 'circle-color', colors)
 
     function onClick(event: MapLayerMouseEvent) {
       const feature = event.features?.[0]
@@ -73,13 +97,17 @@ export default function RiskLayer({ map, zones, zoneTypes, highlightTypes }: Pro
     }
     const enter = () => { map.getCanvas().style.cursor = 'pointer' }
     const leave = () => { map.getCanvas().style.cursor = '' }
-    map.on('click', FILL, onClick)
-    map.on('mouseenter', FILL, enter)
-    map.on('mouseleave', FILL, leave)
+    for (const layer of [FILL, DOTS]) {
+      map.on('click', layer, onClick)
+      map.on('mouseenter', layer, enter)
+      map.on('mouseleave', layer, leave)
+    }
     return () => {
-      map.off('click', FILL, onClick)
-      map.off('mouseenter', FILL, enter)
-      map.off('mouseleave', FILL, leave)
+      for (const layer of [FILL, DOTS]) {
+        map.off('click', layer, onClick)
+        map.off('mouseenter', layer, enter)
+        map.off('mouseleave', layer, leave)
+      }
     }
   }, [map, zoneTypes])
 
@@ -87,35 +115,39 @@ export default function RiskLayer({ map, zones, zoneTypes, highlightTypes }: Pro
     const source = map.getSource(SOURCE)
     if (source && 'setData' in source && zones) {
       (source as { setData: (data: unknown) => void }).setData(zones)
+      const dots = map.getSource(DOT_SOURCE) as unknown as { setData: (data: unknown) => void }
+      dots.setData(zoneDots(zones))
     }
   }, [map, zones])
 
   useEffect(() => {
-    // Types avoided at the current level are drawn strongly, the others faintly (requirement 3.6).
-    const strong = highlightTypes.length > 0
-    map.setPaintProperty(FILL, 'fill-opacity',
-      strong ? ['match', ['get', 'type'], highlightTypes, 0.55, 0.12] : 0.12)
-    map.setPaintProperty(OUTLINE, 'line-opacity',
-      strong ? ['match', ['get', 'type'], highlightTypes, 1, 0.35] : 0.35)
-  }, [map, highlightTypes, zoneTypes])
+    // Types avoided at the current level and zones the route passes are drawn strongly, the others
+    // faintly (requirement 3.6). A passed zone must stand out even when its type is not avoided.
+    const onRoute: ExpressionSpecification = ['in', ['get', 'id'], ['literal', passedZoneIds]]
+    const strong: ExpressionSpecification = ['any', ['in', ['get', 'type'], ['literal', highlightTypes]], onRoute]
+    map.setPaintProperty(FILL, 'fill-opacity', ['case', strong, 0.6, 0.2])
+    map.setPaintProperty(OUTLINE, 'line-opacity', ['case', strong, 1, 0.5])
+    // Real data has hundreds of zones: only those on the route get a full marker, or the map fills up.
+    map.setPaintProperty(DOTS, 'circle-radius', ['case', onRoute, 6, strong, 3, 2])
+    map.setPaintProperty(DOTS, 'circle-opacity', ['case', strong, 0.95, 0.4])
+    map.setPaintProperty(DOTS, 'circle-stroke-width', ['case', onRoute, 1.5, 0])
+  }, [map, highlightTypes, passedZoneIds, zoneTypes])
 
   return (
-    <div className="pointer-events-none absolute top-2 left-2 z-10 rounded-lg bg-background/90 p-2 text-[11px] leading-4 shadow ring-1 ring-foreground/10 lg:p-2.5 lg:text-xs">
-      <p className="mb-1.5 font-medium">위험 구역</p>
-      <ul className="space-y-1">
+    <div className="pointer-events-none absolute top-2 left-2 z-10 max-w-[calc(100%-4rem)] rounded-lg bg-background/80 p-2 text-[11px] leading-4 shadow ring-1 ring-foreground/10 backdrop-blur lg:top-auto lg:bottom-2 lg:p-2.5 lg:text-xs">
+      <p className="mb-1 font-medium">위험 구역</p>
+      <ul className="flex flex-wrap gap-x-3 gap-y-1">
         {(Object.keys(zoneTypes) as ZoneType[]).map(type => (
           <li key={type} className="flex items-center gap-2">
             <span className="inline-block size-3 rounded-sm"
               style={{ background: zoneTypes[type].color, opacity: highlightTypes.includes(type) ? 1 : 0.35 }} />
             <span className={highlightTypes.includes(type) ? 'font-semibold' : 'text-muted-foreground'}>
-              {zoneTypes[type].label}{highlightTypes.includes(type) ? ' · 피함' : ''}
+              {zoneTypes[type].label}{highlightTypes.includes(type) ? ' · 회피 대상' : ''}
             </span>
           </li>
         ))}
       </ul>
-      {zones?.metadata.has_dummy && (
-        <p className="mt-1.5 font-medium text-orange-700">더미 데이터 — 실제 자료 아님</p>
-      )}
+      {notice && <p className="mt-1 font-medium text-amber-200">{notice}</p>}
       <p className="mt-0.5 text-muted-foreground">기준일 {zones?.metadata.data_checked_at ?? '-'}</p>
     </div>
   )

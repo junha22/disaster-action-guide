@@ -16,7 +16,7 @@ from pathlib import Path
 import threading
 from typing import Any, Callable, Sequence
 
-from .base import (EngineUnavailable, ExcludeLimitExceeded, ExcludeLimits, LocationNotRoutable,
+from .base import (EngineUnavailable, ExcludeLimitExceeded, ExcludeLimits, GuidanceStep, LocationNotRoutable,
                    LonLat, NoRouteFound, OsrmRoute, Ring)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -26,6 +26,13 @@ DEFAULT_CONFIG = PROJECT_ROOT / ".local-data" / "valhalla" / "valhalla.json"
 NO_ROUTE_CODES = {170, 442}
 LOCATION_CODES = {171}
 EXCLUDE_LIMIT_CODES = {167, 176}
+# Valhalla maneuver type -> engine-neutral kind. Anything unlisted reads as going straight on.
+MANEUVER_KINDS = {
+    1: "depart", 2: "depart", 3: "depart", 4: "arrive", 5: "arrive", 6: "arrive",
+    9: "slight_right", 10: "right", 11: "sharp_right", 12: "uturn", 13: "uturn", 14: "sharp_left", 15: "left",
+    16: "slight_left", 18: "slight_right", 19: "slight_left", 20: "slight_right", 21: "slight_left",
+    23: "slight_right", 24: "slight_left", 25: "merge", 26: "roundabout", 37: "merge", 38: "merge",
+}
 
 
 def ascii_path(path: Path, cwd: Path) -> str | None:
@@ -59,6 +66,37 @@ def build_request(origin: LonLat, destination: LonLat, exclude_polygons: Sequenc
     if exclude_polygons:
         request["exclude_polygons"] = [[[float(x), float(y)] for x, y in ring] for ring in exclude_polygons]
     return request
+
+
+def build_guidance_request(coordinates: Sequence[LonLat]) -> dict[str, Any]:
+    # format=json: only the OSRM serializer hits the Windows street-name encoding bug noted above.
+    return {
+        "shape": [{"lon": lon, "lat": lat} for lon, lat in coordinates],
+        "costing": "auto",
+        "shape_match": "map_snap",
+        "format": "json",
+        "directions_type": "maneuvers",
+    }
+
+
+def _road_name(names: Any) -> str:
+    """Prefer a real name over a route number: ['22', '상무대로'] -> 상무대로, ['1'] -> 1번 도로."""
+    names = [str(n).strip() for n in (names or []) if str(n).strip()]
+    named = next((n for n in names if not n.isdigit()), None)
+    if named:
+        return named
+    return f"{names[0]}번 도로" if names else ""
+
+
+def parse_guidance(response: dict[str, Any]) -> list[GuidanceStep]:
+    legs = (response.get("trip") or {}).get("legs") or []
+    if not legs:
+        raise NoRouteFound()
+    return [{"kind": MANEUVER_KINDS.get(m.get("type"), "straight"),
+             "name": _road_name(m.get("street_names")),
+             "distance_m": float(m.get("length", 0.0)) * 1000.0,
+             "duration_s": float(m.get("time", 0.0))}
+            for leg in legs for m in leg.get("maneuvers", [])]
 
 
 def _normalize(route: dict[str, Any]) -> OsrmRoute:
@@ -152,7 +190,7 @@ class ValhallaEngine:
         return ExcludeLimits(max_perimeter_m=float(limits.get("max_exclude_polygons_length", 10000)),
                              max_vertices=int(limits.get("max_exclude_polygons_vertices", 100)))
 
-    def _call(self, request: dict[str, Any]) -> dict[str, Any]:
+    def _ensure_actor(self) -> None:
         if self._actor is None:
             try:
                 self._actor = self._actor_factory(copy.deepcopy(self._load_config()))
@@ -160,12 +198,31 @@ class ValhallaEngine:
                 raise
             except Exception:
                 raise EngineUnavailable() from None
+
+    def _call(self, request: dict[str, Any]) -> dict[str, Any]:
+        self._ensure_actor()
         try:
             return self._actor.route(request)
         except UnicodeDecodeError as exc:
             return _recover_response(exc)
         except Exception as exc:
             raise _map_error(exc) from None
+
+    def _call_trace(self, request: dict[str, Any]) -> dict[str, Any]:
+        self._ensure_actor()
+        try:
+            return self._actor.trace_route(request)
+        except Exception as exc:
+            raise _map_error(exc) from None
+
+    def guidance(self, coordinates: Sequence[LonLat], *, timeout_s: float = 10.0) -> list[GuidanceStep]:
+        self._load_config()
+        future = self._executor.submit(self._call_trace, build_guidance_request(coordinates))
+        try:
+            response = future.result(timeout=timeout_s)
+        except FutureTimeout:
+            raise EngineUnavailable() from None
+        return parse_guidance(response)
 
     def route(self, origin: LonLat, destination: LonLat, *, exclude_polygons: Sequence[Ring] = (),
               alternates: int = 0, timeout_s: float = 10.0) -> list[OsrmRoute]:

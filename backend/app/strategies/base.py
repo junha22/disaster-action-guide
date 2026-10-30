@@ -134,6 +134,7 @@ REASON_NO_PATH = "위험 구역을 제외하면 도착할 수 있는 경로가 �
 REASON_LIMIT = "피할 구역이 너무 많거나 커서 경로 엔진이 처리하지 못했습니다."
 REASON_NEAR_ROAD = "출발지나 목적지 근처 도로가 모두 피해야 할 구역에 걸립니다."
 REASON_LEFTOVER = "경로 엔진이 일부 위험 구역을 피하지 못했습니다."
+REASON_TIME = "제한 시간 안에 우회 경로 계산을 끝내지 못했습니다. 다시 시도해 주세요."
 
 
 def ordered_types(types: Iterable[str]) -> tuple[str, ...]:
@@ -181,6 +182,8 @@ def type_phrase(ctx: StrategyContext, types: Sequence[str]) -> str:
 
 # Rounds of "exclude the zones the route passes, route again" before giving up.
 MAX_EXCLUDE_ROUNDS = 8
+# Do not start another engine call with less time than this left in the request's budget.
+MIN_ROUND_TIME_S = 1.0
 
 
 def route_excluding(ctx: StrategyContext, request: RouteRequest, types: Sequence[str],
@@ -193,27 +196,34 @@ def route_excluding(ctx: StrategyContext, request: RouteRequest, types: Sequence
     baseline passes) and, each round, adds the avoided-type zones the new route still passes.
     Raises ExcludeLimitExceeded when the chosen set goes over the engine limits; engine errors
     propagate. Returns the last routes; the caller checks whether zones are left on them.
+    Alternates are only asked for once the set is final: they make every round much slower.
     """
     by_id = {p.zone.id: p for p in polygons}
     chosen = sorted(i for i in set(start_ids) if i in by_id)
     limits = ctx.engine.exclude_limits()
     routes: list[OsrmRoute] = []
+    rings: list = []
+    settled = False
     for round_no in range(MAX_EXCLUDE_ROUNDS):
-        if round_no and ctx.remaining() < 1.0:
+        if round_no and ctx.remaining() < MIN_ROUND_TIME_S:
             break
         selected = [by_id[i] for i in chosen]
         if (sum(p.perimeter_m for p in selected) > limits.max_perimeter_m
                 or sum(p.vertices for p in selected) > limits.max_vertices):
             raise ExcludeLimitExceeded()
-        routes = ctx.engine.route(request.origin, request.destination,
-                                  exclude_polygons=[r for p in selected for r in p.rings],
-                                  alternates=alternates, timeout_s=ctx.remaining())
+        rings = [r for p in selected for r in p.rings]
+        routes = ctx.engine.route(request.origin, request.destination, exclude_polygons=rings,
+                                  timeout_s=ctx.remaining())
         passed = score_route(routes[0]["geometry"]["coordinates"], ctx.layer,
                              ctx.params.weights).zone_ids(types)
         new = sorted(i for i in passed if i in by_id and i not in chosen)
         if not new:  # clear, or the engine went through an excluded zone (caller reports it)
+            settled = True
             break
         chosen.extend(new)
+    if settled and alternates and ctx.remaining() >= MIN_ROUND_TIME_S:
+        routes = ctx.engine.route(request.origin, request.destination, exclude_polygons=rings,
+                                  alternates=alternates, timeout_s=ctx.remaining())
     return routes
 
 
@@ -250,6 +260,6 @@ def avoid_plan(ctx: StrategyContext, request: RouteRequest, types: Iterable[str]
                   for i, r in enumerate(routes)]
     chosen = candidates[0]
     if chosen.exposure.zone_ids(types):
-        return failed(REASON_LEFTOVER)
+        return failed(REASON_TIME if ctx.remaining() < MIN_ROUND_TIME_S else REASON_LEFTOVER)
     return make_plan(ctx, route=chosen, baseline=baseline, status="avoided", avoid_types=types,
                      alternatives=candidates[1:], message=f"{phrase} 구역을 피한 경로입니다.")

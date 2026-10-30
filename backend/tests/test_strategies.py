@@ -83,8 +83,11 @@ def test_tiered_rain_boundaries(rn1, level, avoided, route_label):
         assert e.status == "no_avoid_level" and e.message.startswith("현재 강수 단계에서는 피하는 구역이 없습니다")
         assert len(fake.calls) == 1 and plan.route is plan.baseline
     else:
-        assert e.status == "avoided" and len(fake.calls) == 2
+        # baseline, the avoiding route, then the same exclusions once more for alternates
+        assert e.status == "avoided" and len(fake.calls) == 3
         assert len(fake.calls[1]["exclude_polygons"]) == len(avoided)
+        assert fake.calls[1]["alternates"] == 0 and fake.calls[2]["alternates"] == 2
+        assert fake.calls[2]["exclude_polygons"] == fake.calls[1]["exclude_polygons"]
         assert {z["type"] for z in e.avoided_zones} == set(avoided)
         assert e.added_duration_s > 0
         assert plan.metrics()["route"]["exposure_score"] < plan.metrics()["baseline"]["exposure_score"]
@@ -168,10 +171,27 @@ def test_only_zones_on_the_route_are_excluded_and_new_ones_are_added():
     second = make_zone("second", "flood_history", square(126.86, LAT + 0.005, 100))
     plan, fake = run("tiered_rain", rn1=55, layer=corridor_layer([far, second]))
     assert plan.explanation.status == "avoided"
-    assert len(fake.calls) == 3
+    assert len(fake.calls) == 4
     assert len(fake.calls[1]["exclude_polygons"]) == 2  # z-underpass, z-flood_history
     assert len(fake.calls[2]["exclude_polygons"]) == 3  # + second
+    assert [c["alternates"] for c in fake.calls[1:]] == [0, 0, 2]  # only the final set asks for them
     assert label_of(plan) == "avoid-all"
+
+
+def test_running_out_of_time_is_reported_as_a_timeout():
+    # 'second' forces another round, but the budget is gone by then.
+    second = make_zone("second", "flood_history", square(126.86, LAT + 0.005, 100))
+
+    def slow(call):
+        time.sleep(0.15)
+
+    fake = engine(error=slow)
+    resolved = resolve(get_config(), registry.get_strategy("tiered_rain").params_model, {})
+    ctx = StrategyContext(weather=demo_weather(55, "none", resolved), layer=corridor_layer([second]),
+                          engine=fake, params=resolved, deadline=time.monotonic() + 1.2)
+    e = registry.get_strategy("tiered_rain").plan(REQUEST, ctx).explanation
+    assert e.status == "avoid_failed"
+    assert "제한 시간" in e.failure_reason
 
 
 def test_nothing_on_route_skips_the_exclusion_call():

@@ -27,6 +27,7 @@ function Get-CondaPrefix([string]$name) {
     return $prefix
 }
 
+# [IO.File] resolves relative paths against the process directory, which Push-Location does not change.
 function Write-Utf8NoBom([string]$path, [string]$text) {
     [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding $false))
 }
@@ -106,7 +107,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'valhalla_build_config failed.' }
     $configText = ($configJson | Out-String).Trim()
     $null = $configText | ConvertFrom-Json
-    Write-Utf8NoBom $configRel ($configText + "`n")
+    Write-Utf8NoBom (Join-Path $root $configRel) ($configText + "`n")
 
     # 4. Build tiles from scratch (only the tiles folder owned by this script is replaced).
     if (Test-Path -LiteralPath $tilesRel) { Remove-Item -LiteralPath $tilesRel -Recurse -Force }

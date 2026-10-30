@@ -124,7 +124,7 @@ export default function SearchBar({ id, label, value, onChange, demoPoints, bbox
         </>
       )}
       {hint && <p role="status" className="text-xs text-muted-foreground">{hint}</p>}
-      {result?.notice && <p role="status" className="text-xs text-orange-700">{result.notice}</p>}
+      {result?.notice && <p role="status" className="text-xs text-amber-200">{result.notice}</p>}
       {!value && items.length > 0 && (
         <ul className="max-h-56 space-y-1 overflow-y-auto rounded-lg border p-1" aria-label={`${label} 검색 결과`}>
           {items.map(item => (

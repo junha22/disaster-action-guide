@@ -11,7 +11,7 @@ from ..config import AppConfig, rain_level
 from ..context.weather_kma import KmaWeatherService, get_weather_service
 from ..context.weather_mock import demo_weather, unavailable_weather
 from ..engines import get_engine
-from ..engines.base import EngineUnavailable, RoutingEngine
+from ..engines.base import EngineError, EngineUnavailable, RoutingEngine
 from ..risk.geo import in_service_area
 from ..risk.layer import RiskLayer
 from ..strategies.base import ResolvedParams, RouteNotFound, RouteRequest, StrategyContext, WeatherContext
@@ -22,6 +22,7 @@ from .deps import config_dep, layer_dep
 router = APIRouter(prefix="/api", tags=["route"])
 ENGINE_DOWN = "경로 엔진에 연결할 수 없습니다"
 NO_ROUTE = "두 지점 사이 자동차 경로를 찾지 못했습니다"
+MAX_GUIDANCE_POINTS = 20000
 OUTSIDE = "광주광역시 범위 밖의 좌표입니다"
 
 
@@ -107,3 +108,30 @@ def find_route(body: RouteBody,
         raise HTTPException(422, NO_ROUTE) from None
     return {"strategy": {"name": strategy.name, "label": strategy.label}, **plan.to_dict(),
             "weather": weather.as_dict()}
+
+
+class GuidanceBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    coordinates: list[tuple[float, float]] = Field(min_length=2, max_length=MAX_GUIDANCE_POINTS)
+
+    @field_validator("coordinates")
+    @classmethod
+    def _finite(cls, value: list[tuple[float, float]]) -> list[tuple[float, float]]:
+        if not all(math.isfinite(n) for point in value for n in point):
+            raise ValueError("must be finite")
+        return value
+
+
+@router.post("/route/guidance")
+def route_guidance(body: GuidanceBody,
+                   config: Annotated[AppConfig, Depends(config_dep)],
+                   engine: Annotated[RoutingEngine, Depends(get_engine)]):
+    """Turn-by-turn steps for a route the client already has. Coordinates are not stored or logged."""
+    if not (in_service_area(*body.coordinates[0]) and in_service_area(*body.coordinates[-1])):
+        raise HTTPException(422, OUTSIDE)
+    try:
+        return {"steps": engine.guidance(body.coordinates, timeout_s=timeout_s(config))}
+    except EngineUnavailable:
+        raise HTTPException(503, ENGINE_DOWN) from None
+    except EngineError:
+        raise HTTPException(422, NO_ROUTE) from None

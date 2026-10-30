@@ -1,6 +1,6 @@
 """Engine adapter contract (requirement 5.1). Strategies call engines only through this."""
 from dataclasses import dataclass
-from typing import Any, Protocol, Sequence
+from typing import Any, Protocol, Sequence, TypedDict
 
 LonLat = tuple[float, float]
 Ring = Sequence[Sequence[float]]  # closed [[lon, lat], ...]
@@ -11,6 +11,13 @@ OsrmRoute = dict[str, Any]
 class ExcludeLimits:
     max_perimeter_m: float
     max_vertices: int
+
+
+class GuidanceStep(TypedDict):
+    kind: str  # depart, arrive, straight, slight_left, left, sharp_left, uturn, right, ...
+    name: str  # road entered by this step; empty when the map has no name
+    distance_m: float
+    duration_s: float
 
 
 class EngineError(Exception):
@@ -41,6 +48,10 @@ class RoutingEngine(Protocol):
     def route(self, origin: LonLat, destination: LonLat, *, exclude_polygons: Sequence[Ring] = (),
               alternates: int = 0, timeout_s: float = 10.0) -> list[OsrmRoute]:
         """Return OSRM-format routes, best first, at most 1 + alternates."""
+        ...
+
+    def guidance(self, coordinates: Sequence[LonLat], *, timeout_s: float = 10.0) -> list[GuidanceStep]:
+        """Return turn-by-turn steps along exactly this route, in travel order."""
         ...
 
 

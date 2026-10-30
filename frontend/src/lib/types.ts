@@ -134,6 +134,17 @@ export interface RouteRequestBody {
   weather_override: { rn1_mm: number; alert: Alert } | null
 }
 
+export type StepKind =
+  | 'depart' | 'arrive' | 'straight' | 'slight_left' | 'left' | 'sharp_left'
+  | 'slight_right' | 'right' | 'sharp_right' | 'uturn' | 'merge' | 'roundabout'
+
+export interface GuidanceStep {
+  kind: StepKind
+  name: string
+  distance_m: number
+  duration_s: number
+}
+
 export interface ZoneProperties extends ZoneRef {
   active: boolean
   source_name: string
