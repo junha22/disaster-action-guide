@@ -11,9 +11,8 @@ default_radius_m:
   riverside:     {LineString: 40}
 
 sources:
-  # Dummy underpass/riverside zones (no real source yet). The dummy flood zones were replaced
-  # by the real flood data below.
-  - {reader: seed_json, path: sources/dummy_seed.json}
+  # Real data only. The hand-drawn dummy zones (sources/dummy_seed.json) were removed on
+  # 2026-10-30; underpass and riverside have no zones until real data is added.
   # 광주 북구·서구·광산구 침수 피해 기록 2021~2025 -> 657 flood_history polygons
   # (see risk_zones_guide.md at the repository root).
   - {reader: flood_zone_geojson, path: sources/gwangju_flood_zones.geojson}
