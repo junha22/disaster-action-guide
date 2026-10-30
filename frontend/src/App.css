@@ -1,0 +1,32 @@
+/* Vite 기본 레이아웃 해제. shadcn 테마는 유지 */
+#root {
+  width: 100%;
+  max-width: none;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  display: block;
+  border: 0;
+  text-align: left;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+.kiro-app h1,
+.kiro-app h2 {
+  color: inherit;
+  margin: 0;
+  letter-spacing: normal;
+}
+
+.kiro-app {
+  width: 100%;
+}
+
+.kiro-app select:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}

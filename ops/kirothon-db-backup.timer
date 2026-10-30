@@ -1,0 +1,11 @@
+[Unit]
+Description=Kirothon hourly SQLite backup
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=30
+Persistent=true
+Unit=kirothon-db-backup.service
+
+[Install]
+WantedBy=timers.target

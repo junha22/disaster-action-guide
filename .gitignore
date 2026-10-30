@@ -1,0 +1,43 @@
+# Runtime dependencies and build products
+node_modules/
+.venv/
+__pycache__/
+*.py[cod]
+dist/
+*.tsbuildinfo
+
+# Credentials and operational configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+.aws/
+.ssh/
+credentials
+credentials.json
+
+# Runtime records and backups, never project source
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.db
+*.db-*
+/data/
+/uploads/
+/kirothon-data/
+/kirothon-backups/
+/kirothon-deployments/
+/.local-data/
+*.zip
+*.b64
+*.log
+
+# Local-only editor/OS state
+.DS_Store
+Thumbs.db
+.idea/
+

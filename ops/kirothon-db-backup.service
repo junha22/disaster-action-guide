@@ -1,0 +1,18 @@
+[Unit]
+Description=Kirothon verified SQLite online backup
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+UMask=0077
+WorkingDirectory=/home/ubuntu
+ExecStart=/home/ubuntu/kirothon/backend/.venv/bin/python /home/ubuntu/kirothon-tools/backup_db.py --data-dir /home/ubuntu/kirothon-data --backup-root /home/ubuntu/kirothon-backups backup
+TimeoutStartSec=180
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/kirothon-backups /home/ubuntu/kirothon-data
+
