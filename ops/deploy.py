@@ -27,6 +27,11 @@ SERVICE = 'kirothon-api.service'
 FRONT = {'package.json', 'package-lock.json', 'index.html', 'vite.config.ts',
          'tsconfig.json', 'tsconfig.app.json', 'tsconfig.node.json', 'components.json',
          'eslint.config.js', 'eslint.config.mjs', 'oxlint.config.json', '.oxlintrc.json'}
+BACKEND_RUNTIME = {
+    'backend/app/config/strategies.yaml',
+    'backend/app/data/demo_points.json',
+    'backend/app/data/risk_zones.geojson',
+}
 MAX_BYTES = 100 * 1024 * 1024
 
 
@@ -34,6 +39,8 @@ def allowed(name):
     p = PurePosixPath(name)
     if not name or '\\' in name or p.is_absolute() or '..' in p.parts or name != str(p):
         return False
+    if name in BACKEND_RUNTIME:
+        return True
     if any(x in {'.git', 'node_modules', '.venv', '__pycache__', 'dist', 'data', 'uploads'}
            or x.startswith('.env') for x in p.parts):
         return False
@@ -41,7 +48,7 @@ def allowed(name):
         return False
     if p.parts[:2] == ('backend', 'app'):
         return len(p.parts) > 2 and p.suffix == '.py'
-    if name == 'backend/requirements.lock':
+    if name in {'backend/requirements.lock', 'backend/requirements.team.txt'}:
         return True
     if p.parts[:2] in {('frontend', 'src'), ('frontend', 'public')}:
         return len(p.parts) > 2 and not any(x.startswith('.') for x in p.parts[2:])
@@ -55,6 +62,14 @@ def sha(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def same_text(left, right):
+    """Compare UTF-8 source while ignoring platform newline encoding."""
+    def normalized(path):
+        return path.read_text(encoding='utf-8').replace('\r\n', '\n').replace('\r', '\n')
+
+    return normalized(left) == normalized(right)
+
+
 def source_files(project):
     for folder in ('backend/app', 'frontend/src', 'frontend/public', '.kiro/steering', '.kiro/specs'):
         base = project / folder
@@ -66,7 +81,8 @@ def source_files(project):
                     raise ValueError('Source symlinks are not accepted')
                 if path.is_file() and allowed(path.relative_to(project).as_posix()):
                     yield path
-    for name in ('backend/requirements.lock', *(f'frontend/{n}' for n in sorted(FRONT))):
+    for name in ('backend/requirements.lock', 'backend/requirements.team.txt',
+                 *(f'frontend/{n}' for n in sorted(FRONT))):
         path = project / name
         if path.is_symlink():
             raise ValueError('Source symlinks are not accepted')
@@ -83,7 +99,7 @@ def pack(project, output):
             archive.write(path, path.relative_to(project).as_posix())
 
 
-def extract(archive, target):
+def extract(archive, target, require_runtime=True):
     total = 0
     seen = set()
     with zipfile.ZipFile(archive) as bundle:
@@ -98,9 +114,13 @@ def extract(archive, target):
             total += entry.file_size
             if total > MAX_BYTES:
                 raise ValueError('Source archive exceeds 100 MiB')
-        for required in ('backend/app/main.py', 'backend/requirements.lock',
-                         'frontend/src/App.tsx', 'frontend/package.json',
-                         'frontend/package-lock.json', 'frontend/index.html'):
+        required_files = ('backend/app/main.py', 'backend/requirements.lock',
+                          'backend/requirements.team.txt',
+                          'frontend/src/App.tsx', 'frontend/package.json',
+                          'frontend/package-lock.json', 'frontend/index.html')
+        if require_runtime:
+            required_files += tuple(sorted(BACKEND_RUNTIME))
+        for required in required_files:
             if required not in seen:
                 raise ValueError('Incomplete source archive: ' + required)
         for entry in bundle.infolist():
@@ -122,12 +142,13 @@ def execute(args, cwd=None, timeout=180, env=None):
 
 
 def prepare(stage, project, run=execute):
-    for name in ('backend/requirements.lock', 'frontend/package-lock.json'):
+    for name in ('backend/requirements.lock', 'backend/requirements.team.txt',
+                 'frontend/package-lock.json'):
         if sha(stage / name) != sha(project / name):
             raise ValueError('Dependency lock change requires separate mentor preparation: ' + name)
     for name in ('models.py', 'database.py'):
         old, new = project / 'backend/app' / name, stage / 'backend/app' / name
-        if old.exists() and (not new.is_file() or sha(old) != sha(new)):
+        if old.exists() and (not new.is_file() or not same_text(old, new)):
             raise ValueError('DB model/config changes require a separate reviewed change: ' + name)
     for path in (stage / 'backend/app').rglob('*.py'):
         ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
@@ -322,7 +343,7 @@ def main():
             shutil.copyfile(archive, staged_archive)
             stage = release / 'candidate'
             stage.mkdir()
-            extract(staged_archive, stage)
+            extract(staged_archive, stage, require_runtime=args.command != 'rollback')
             prepare(stage, PROJECT)
             if args.command == 'check':
                 print(json.dumps({'check': 'passed', 'release': label, 'live_code_changed': False}))

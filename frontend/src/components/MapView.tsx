@@ -11,7 +11,9 @@ import type { AppConfig, LineGeometry, LonLat, Place, ZoneFeatureCollection, Zon
 // OpenFreeMap: no API key. The default attribution control stays on (requirement 6.1).
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty'
 const GWANGJU: LonLat = [126.85, 35.16]
-setWorkerUrl(workerUrl)
+// Keep a version on the worker request so browsers do not reuse a partial response
+// cached before the server started serving .mjs as JavaScript.
+setWorkerUrl(`${workerUrl}?v=20261030-1`)
 
 const LINES = [
   { id: 'route-alternatives', color: '#a78bfa', width: 3, dash: undefined as number[] | undefined, opacity: 0.6 },

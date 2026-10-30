@@ -61,6 +61,16 @@ def test_address_search_is_used_when_keyword_has_no_result():
     assert result["items"][0]["selectable"] and result["items"][0]["name"] == "광주 서구 내방로 111"
 
 
+def test_current_full_gwangju_admin_name_is_selectable():
+    place = {"id": "3", "place_name": "광주송정역",
+             "address_name": "전남광주통합특별시 광산구 송정동 1003-1",
+             "road_address_name": "전남광주통합특별시 광산구 상무대로 201",
+             "x": "126.7908", "y": "35.1377"}
+    svc, _ = kakao_service(lambda r: httpx.Response(200, json={"documents": [place]}))
+    result = svc.search("광주송정역")
+    assert result["items"][0]["selectable"]
+
+
 def test_missing_key_uses_demo_points_without_network():
     svc, calls = kakao_service(lambda r: httpx.Response(200, json={}), key=None)
     result = svc.search("광주역")

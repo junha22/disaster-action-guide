@@ -29,6 +29,11 @@ if ($Mode -eq 'Rollback') {
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $fileMap = @{}
+$backendRuntimeFiles = @(
+    'backend/app/config/strategies.yaml',
+    'backend/app/data/demo_points.json',
+    'backend/app/data/risk_zones.geojson'
+)
 $roots = @('backend/app','frontend/src','frontend/public','.kiro/steering','.kiro/specs')
 foreach ($relativeRoot in $roots) {
     $directory = Join-Path $project $relativeRoot
@@ -38,6 +43,10 @@ foreach ($relativeRoot in $roots) {
         if ($item.PSIsContainer) { continue }
         $relative = $item.FullName.Substring($project.Length + 1).Replace('\','/')
         $parts = $relative.Split('/')
+        if ($relative -in $backendRuntimeFiles) {
+            $fileMap[$relative] = $item.FullName
+            continue
+        }
         if ($parts | Where-Object { $_ -in @('.git','node_modules','.venv','__pycache__','dist','data','uploads') -or $_ -like '.env*' }) { continue }
         if ($item.Extension.ToLowerInvariant() -in @('.pem','.key','.pfx','.p12','.db','.sqlite','.sqlite3','.pyc')) { continue }
         if ($relativeRoot -eq 'backend/app' -and $item.Extension -cne '.py') { continue }
@@ -49,7 +58,7 @@ foreach ($relativeRoot in $roots) {
 $frontFiles = @('package.json','package-lock.json','index.html','vite.config.ts',
     'tsconfig.json','tsconfig.app.json','tsconfig.node.json','components.json',
     'eslint.config.js','eslint.config.mjs','oxlint.config.json','.oxlintrc.json')
-$individual = @('backend/requirements.lock') + @($frontFiles | ForEach-Object { 'frontend/' + $_ })
+$individual = @('backend/requirements.lock','backend/requirements.team.txt') + @($frontFiles | ForEach-Object { 'frontend/' + $_ })
 foreach ($relative in $individual) {
     $path = Join-Path $project $relative
     if (Test-Path -LiteralPath $path -PathType Leaf) {
@@ -57,7 +66,8 @@ foreach ($relative in $individual) {
         $fileMap[$relative] = $path
     }
 }
-foreach ($required in @('backend/app/main.py','backend/requirements.lock','frontend/src/App.tsx',
+foreach ($required in @('backend/app/main.py','backend/app/config/strategies.yaml','backend/app/data/demo_points.json',
+                       'backend/app/data/risk_zones.geojson','backend/requirements.lock','backend/requirements.team.txt','frontend/src/App.tsx',
                        'frontend/package.json','frontend/package-lock.json','frontend/index.html')) {
     if (-not $fileMap.ContainsKey($required)) { throw "Missing source file: $required" }
 }

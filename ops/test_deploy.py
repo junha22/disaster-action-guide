@@ -12,12 +12,17 @@ import deploy
 
 
 def fixture(root, label):
-    for name in ('backend/app', 'frontend/src', 'frontend/public'):
+    for name in ('backend/app/config', 'backend/app/data', 'frontend/src', 'frontend/public'):
         (root / name).mkdir(parents=True)
     (root / 'backend/app/main.py').write_text('VERSION = ' + repr(label))
     (root / 'backend/app/models.py').write_text('VERSION = 1')
     (root / 'backend/app/database.py').write_text('VERSION = 1')
+    (root / 'backend/app/config/strategies.yaml').write_text('strategies: {}')
+    (root / 'backend/app/data/demo_points.json').write_text('[]')
+    (root / 'backend/app/data/risk_zones.geojson').write_text(
+        '{"type":"FeatureCollection","features":[]}')
     (root / 'backend/requirements.lock').write_text('fixed')
+    (root / 'backend/requirements.team.txt').write_text('team-fixed')
     (root / 'frontend/src/App.tsx').write_text(label)
     (root / 'frontend/package.json').write_text('{}')
     (root / 'frontend/package-lock.json').write_text('{}')
@@ -51,11 +56,14 @@ class DeployTests(unittest.TestCase):
         return ''
 
     def test_allowed_and_forbidden(self):
-        for name in ('backend/app/main.py', 'frontend/src/App.tsx', '.kiro/steering/data-policy.md'):
+        for name in ('backend/app/main.py', 'backend/app/config/strategies.yaml',
+                     'backend/app/data/demo_points.json', 'backend/app/data/risk_zones.geojson',
+                     'frontend/src/App.tsx', '.kiro/steering/data-policy.md'):
             self.assertTrue(deploy.allowed(name))
         for name in ('../escape.py', '/backend/app/main.py', 'backend/app/.env',
                      'frontend/src/key.pem', 'backend/.venv/config.py', 'data/a.db',
                      'frontend/node_modules/index.js', 'backend/app/records.sqlite3',
+                     'backend/app/data/other.json', 'backend/app/config/other.yaml',
                      'frontend/src/../outside.ts', 'frontend\\src\\App.tsx'):
             self.assertFalse(deploy.allowed(name))
 
@@ -67,10 +75,26 @@ class DeployTests(unittest.TestCase):
         with zipfile.ZipFile(out) as z:
             self.assertNotIn('backend/.env', z.namelist())
             self.assertNotIn('backend/app/private.pem', z.namelist())
+            self.assertIn('backend/app/config/strategies.yaml', z.namelist())
+            self.assertIn('backend/app/data/demo_points.json', z.namelist())
+            self.assertIn('backend/app/data/risk_zones.geojson', z.namelist())
         target = self.base / 'extracted'
         target.mkdir()
         deploy.extract(out, target)
         self.assertTrue((target / 'backend/app/main.py').is_file())
+
+    def test_extract_rejects_missing_runtime_data(self):
+        complete = self.base / 'complete.zip'
+        deploy.pack(self.live, complete)
+        with zipfile.ZipFile(complete) as source:
+            kept = {name: source.read(name) for name in source.namelist()
+                    if name != 'backend/app/data/demo_points.json'}
+        incomplete = self.base / 'missing-runtime.zip'
+        with zipfile.ZipFile(incomplete, 'w') as target:
+            for name, content in kept.items():
+                target.writestr(name, content)
+        with self.assertRaisesRegex(ValueError, 'demo_points.json'):
+            deploy.extract(incomplete, self.base / 'extract-missing-runtime')
 
     def test_zip_traversal_rejected(self):
         out = self.base / 'bad.zip'
@@ -95,11 +119,28 @@ class DeployTests(unittest.TestCase):
             deploy.prepare(self.stage, self.live, self.run_command)
         self.assertEqual(self.commands, [])
 
+    def test_team_dependency_change_rejected_before_build(self):
+        (self.stage / 'backend/requirements.team.txt').write_text('changed')
+        with self.assertRaises(ValueError):
+            deploy.prepare(self.stage, self.live, self.run_command)
+        self.assertEqual(self.commands, [])
+
     def test_schema_change_rejected_before_build(self):
         (self.stage / 'backend/app/models.py').write_text('VERSION = 2')
         with self.assertRaises(ValueError):
             deploy.prepare(self.stage, self.live, self.run_command)
         self.assertEqual(self.commands, [])
+
+    def test_schema_newline_encoding_does_not_trigger_change(self):
+        (self.live / 'backend/app/models.py').write_bytes(b'VERSION = 1\n')
+        (self.stage / 'backend/app/models.py').write_bytes(b'VERSION = 1\r\n')
+        (self.live / 'backend/app/database.py').write_bytes(b'VERSION = 1\n')
+        (self.stage / 'backend/app/database.py').write_bytes(b'VERSION = 1\r\n')
+        (self.live / 'frontend/node_modules').mkdir()
+
+        deploy.prepare(self.stage, self.live, self.run_command)
+
+        self.assertEqual(len(self.commands), 2)
 
     def test_r2_schema_check_runs_before_frontend(self):
         (self.stage / 'backend/app/schema_check.py').write_text('')

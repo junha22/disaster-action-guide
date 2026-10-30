@@ -61,7 +61,10 @@ def demo_results(query: str) -> list[Place]:
 
 def _is_gwangju(region_1depth: str | None, address: str | None, lon: float, lat: float) -> bool:
     first = region_1depth or (address.split()[0] if address and address.split() else "")
-    return first == "광주" and in_service_area(lon, lat)
+    # Kakao may return the short name (광주), the former full name
+    # (광주광역시), or the current full administrative name. Coordinates
+    # still provide the strict boundary check that excludes 경기 광주시.
+    return "광주" in first and in_service_area(lon, lat)
 
 
 def _place(pid: str, name: str, address: str, x: Any, y: Any, region: str | None) -> Place | None:
