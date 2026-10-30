@@ -33,6 +33,19 @@ body {
   outline-offset: 2px;
 }
 
+/* Korean wraps between words, not inside them. Very long strings may still break to fit. */
+.app-shell,
+.drive-shell {
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+/* maplibre sets its own font on everything inside the map. */
+.app-shell .maplibregl-map,
+.drive-shell .maplibregl-map {
+  font-family: inherit;
+}
+
 .app-shell {
   position: relative;
   color-scheme: dark;
@@ -52,12 +65,84 @@ body {
 }
 
 /* Glass panels */
+.glass-card,
+.result-float {
+  --muted-foreground: #c6d4ea;
+  --muted: rgb(255 255 255 / 0.14);
+  --secondary: rgb(255 255 255 / 0.12);
+  --secondary-foreground: #fff;
+  --background: rgb(255 255 255 / 0.1);
+  --input: rgb(255 255 255 / 0.24);
+  --border: rgb(255 255 255 / 0.18);
+  --destructive: #ffe1e1;
+}
+
 .glass-card {
-  border: 1px solid rgb(255 255 255 / 0.12);
-  border-radius: 1rem;
-  background: rgb(13 20 30 / 0.58);
-  backdrop-filter: blur(14px) saturate(1.3);
+  border: 1px solid rgb(160 190 235 / 0.28);
+  border-radius: 1.125rem;
+  background: rgb(36 54 88 / 0.88);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.14), 0 10px 26px rgb(8 16 36 / 0.28);
+  backdrop-filter: blur(14px) saturate(1.4);
+  color: #fff;
   padding: 0.875rem;
+}
+
+.app-shell aside,
+.result-float {
+  scrollbar-color: rgb(255 255 255 / 0.28) transparent;
+  scrollbar-width: thin;
+}
+
+/* Origin and destination as one card, like a navigation app. */
+.route-fields {
+  border: 1px solid rgb(255 255 255 / 0.14);
+  border-radius: 0.875rem;
+  background: rgb(255 255 255 / 0.07);
+  padding: 0.625rem 0.75rem;
+}
+
+.route-label {
+  gap: 0.5rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.route-dot {
+  width: 0.625rem;
+  height: 0.625rem;
+  flex-shrink: 0;
+  border: 2px solid #fff;
+  border-radius: 50%;
+}
+
+/* Same colours as the map's origin and destination pins. */
+.route-dot-origin {
+  background: #16a34a;
+}
+
+.route-dot-destination {
+  background: #dc2626;
+}
+
+.route-divider {
+  position: relative;
+  height: 1px;
+  margin: 0.625rem 0;
+  background: rgb(255 255 255 / 0.14);
+}
+
+.app-shell .route-swap {
+  position: absolute;
+  top: 50%;
+  right: 2rem;
+  border: 1px solid rgb(255 255 255 / 0.18);
+  border-radius: 50%;
+  background: #2c4470;
+  transform: translateY(-50%);
+}
+
+.app-shell .route-swap:hover {
+  background: #375488;
 }
 
 .weather-hero {
@@ -76,7 +161,7 @@ body {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: linear-gradient(180deg, rgb(4 10 20 / 0.28) 0, rgb(4 10 20 / 0) 56px, rgb(4 10 20 / 0) 90px, rgb(4 10 20 / 0.62) 150px, rgb(4 10 20 / 0.72) 100%);
+  background: linear-gradient(180deg, rgb(4 10 20 / 0.22) 0, rgb(4 10 20 / 0) 48px, rgb(4 10 20 / 0.22) 110px, rgb(4 10 20 / 0.42) 100%);
 }
 
 .time-switch {
@@ -161,10 +246,22 @@ body {
   text-shadow: none;
 }
 
+/* Same gradient as the driving screen's turn card, so the two screens read as one app. */
+.btn-route {
+  background: linear-gradient(135deg, #0b8478, #1e5fd6);
+  box-shadow: 0 6px 16px rgb(20 80 160 / 0.3);
+  color: #fff;
+  font-weight: 600;
+}
+
+.btn-route:hover {
+  background: linear-gradient(135deg, #0a766b, #1a52b8);
+}
+
 .stat-tile {
   border-radius: 0.75rem;
   background: rgb(255 255 255 / 0.07);
-  padding: 0.5rem 0.75rem;
+  padding: 0.375rem 0.75rem;
 }
 
 .stat-tile dt {
@@ -173,7 +270,7 @@ body {
 }
 
 .stat-tile dd {
-  font-size: 1.25rem;
+  font-size: 1.125rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -206,6 +303,8 @@ body {
 }
 
 .result-float {
+  /* Sits on the map, which can be bright: more opaque than other glass so the text stays readable. */
+  background: rgb(36 54 88 / 0.95);
   position: absolute;
   top: 0.75rem;
   left: 0.75rem;
@@ -243,38 +342,78 @@ body {
   background-color: rgb(226 232 240 / 0.9);
 }
 
-/* Driving screen. Dark glass with a champagne accent; large type for reading at a glance. */
+/* Driving screen. A vivid turn card over panels that follow the map: frosted white by day, blue at night. */
 .drive-shell {
-  --drive-gold: #e9d9ae;
-  --drive-hairline: rgb(233 217 174 / 0.22);
+  --drive-accent: #0d9488;
+  --drive-accent-2: #2563eb;
+  --drive-panel: rgb(255 255 255 / 0.9);
+  --drive-panel-solid: #fff;
+  --drive-border: rgb(255 255 255 / 0.95);
+  --drive-text: #0f172a;
+  --drive-subtle: #51607a;
+  --drive-track: #dbe4ee;
+  --drive-hover: rgb(15 23 42 / 0.08);
+  --drive-shadow: 0 14px 34px rgb(30 58 95 / 0.24);
   position: fixed;
   inset: 0;
   z-index: 50;
   overflow: hidden;
-  background: #0b1018;
-  color: #f7f3e8;
-  color-scheme: dark;
+  background: #dfe7ee;
+  color: var(--drive-text);
+  color-scheme: light;
   font-variant-numeric: tabular-nums;
 }
 
+.drive-shell[data-map-theme="dark"] {
+  --drive-accent: #2dd4bf;
+  --drive-accent-2: #60a5fa;
+  --drive-panel: rgb(35 48 78 / 0.92);
+  --drive-panel-solid: #233050;
+  --drive-border: rgb(148 178 226 / 0.34);
+  --drive-text: #f4f7fc;
+  --drive-subtle: #bccae0;
+  --drive-track: rgb(255 255 255 / 0.16);
+  --drive-hover: rgb(255 255 255 / 0.12);
+  --drive-shadow: 0 14px 34px rgb(3 8 22 / 0.5);
+  background: #1d2740;
+  color-scheme: dark;
+}
+
 .drive-glass {
-  border: 1px solid var(--drive-hairline);
-  background: linear-gradient(160deg, rgb(22 29 44 / 0.86), rgb(8 12 20 / 0.86));
-  box-shadow: 0 18px 50px rgb(0 0 0 / 0.45), inset 0 1px 0 rgb(255 255 255 / 0.06);
-  backdrop-filter: blur(18px) saturate(1.25);
+  border: 1px solid var(--drive-border);
+  background: var(--drive-panel);
+  box-shadow: var(--drive-shadow);
+  backdrop-filter: blur(16px) saturate(1.5);
 }
 
 .drive-vignette {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    linear-gradient(180deg, rgb(5 8 14 / 0.6), transparent 26%),
-    linear-gradient(0deg, rgb(5 8 14 / 0.65), transparent 22%);
+  display: none;
 }
 
+/* No position here: maplibre's own marker styles place this element on the map. */
 .drive-vehicle {
-  filter: drop-shadow(0 6px 10px rgb(0 0 0 / 0.55)) drop-shadow(0 0 12px rgb(52 211 153 / 0.5));
+  filter: drop-shadow(0 4px 7px rgb(15 40 90 / 0.45));
+}
+
+.drive-vehicle::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  z-index: -1;
+  border-radius: 50%;
+  background: rgb(59 130 246 / 0.3);
+  animation: drive-pulse 2.2s ease-out infinite;
+}
+
+@keyframes drive-pulse {
+  0% { opacity: 0.9; transform: scale(0.65); }
+  100% { opacity: 0; transform: scale(1.45); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drive-vehicle::before {
+    animation: none;
+  }
 }
 
 .drive-turn {
@@ -282,62 +421,63 @@ body {
   top: 1rem;
   left: 1rem;
   width: min(23rem, calc(100vw - 2rem));
+  overflow: hidden;
   border-radius: 1.5rem;
-  padding: 1.125rem 1.25rem;
+  background: linear-gradient(135deg, #0b8478, #1e5fd6);
+  box-shadow: 0 16px 38px rgb(20 80 160 / 0.38), inset 0 1px 0 rgb(255 255 255 / 0.3);
+  color: #fff;
 }
 
 .drive-turn-main {
   display: flex;
   align-items: center;
   gap: 1rem;
+  padding: 1rem 1.125rem 0.875rem;
 }
 
 .drive-turn-icon {
   display: grid;
-  width: 4.75rem;
-  height: 4.75rem;
+  width: 4.5rem;
+  height: 4.5rem;
   flex-shrink: 0;
   place-items: center;
-  border-radius: 1.25rem;
-  background: linear-gradient(145deg, #f4ead0, #cdb67e);
-  color: #10151f;
-  box-shadow: 0 8px 22px rgb(205 182 126 / 0.28);
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 6px 18px rgb(6 40 80 / 0.28);
+  color: #1558c9;
 }
 
 .drive-turn-icon svg {
-  width: 3.25rem;
-  height: 3.25rem;
+  width: 2.875rem;
+  height: 2.875rem;
 }
 
 .drive-turn-distance {
   font-size: 2.75rem;
-  font-weight: 300;
+  font-weight: 600;
   line-height: 1;
   letter-spacing: -0.03em;
 }
 
 .drive-turn-label {
   margin-top: 0.3rem;
-  color: var(--drive-gold);
   font-size: 0.9375rem;
   font-weight: 600;
 }
 
 .drive-turn-road {
   overflow: hidden;
-  margin-top: 0.75rem;
-  border-top: 1px solid var(--drive-hairline);
-  padding-top: 0.625rem;
+  padding: 0 1.125rem 0.75rem;
   font-size: 1.375rem;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: -0.01em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .drive-turn-then {
-  margin-top: 0.25rem;
-  color: rgb(247 243 232 / 0.65);
+  background: rgb(4 24 60 / 0.3);
+  padding: 0.4375rem 1.125rem;
   font-size: 0.8125rem;
 }
 
@@ -352,10 +492,19 @@ body {
 }
 
 .drive-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
   border-radius: 999px;
   padding: 0.4375rem 0.875rem;
   font-size: 0.8125rem;
-  font-weight: 500;
+  font-weight: 600;
+}
+
+.drive-chip svg {
+  width: 1.0625rem;
+  height: 1.0625rem;
+  color: var(--drive-accent-2);
 }
 
 .drive-rate {
@@ -369,7 +518,7 @@ body {
 
 .drive-rate span {
   margin-right: 0.25rem;
-  color: rgb(247 243 232 / 0.7);
+  color: var(--drive-subtle);
 }
 
 .drive-rate button {
@@ -380,17 +529,18 @@ body {
 }
 
 .drive-rate button:hover {
-  background: rgb(255 255 255 / 0.1);
+  background: var(--drive-hover);
 }
 
-.drive-rate button:focus-visible {
-  outline: 2px solid var(--drive-gold);
+.drive-rate button:focus-visible,
+.drive-exit:focus-visible {
+  outline: 2px solid var(--drive-accent-2);
   outline-offset: 1px;
 }
 
 .drive-rate button[aria-pressed="true"] {
-  background: var(--drive-gold);
-  color: #10151f;
+  background: #1e5fd6;
+  color: #fff;
 }
 
 .drive-alerts {
@@ -409,13 +559,12 @@ body {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  border: 1px solid;
   border-radius: 999px;
-  padding: 0.5rem 1rem;
-  box-shadow: 0 10px 30px rgb(0 0 0 / 0.4);
+  box-shadow: 0 10px 26px rgb(15 30 60 / 0.3);
+  padding: 0.5625rem 1.125rem;
+  color: #fff;
   font-size: 0.9375rem;
-  font-weight: 600;
-  backdrop-filter: blur(14px);
+  font-weight: 700;
 }
 
 .drive-alert svg {
@@ -425,45 +574,42 @@ body {
 }
 
 .drive-alert-danger {
-  border-color: #fca5a5;
-  background: rgb(127 29 29 / 0.92);
-  color: #fff;
+  background: #dc2626;
 }
 
 .drive-alert-warn {
-  border-color: #fcd34d;
-  background: rgb(120 72 8 / 0.92);
-  color: #fff;
+  background: #c2570c;
 }
 
 .drive-alert-safe {
-  border-color: rgb(110 231 183 / 0.6);
-  background: rgb(6 78 59 / 0.9);
-  color: #ecfdf5;
+  background: #047857;
 }
 
 .drive-speed {
+  --ring: conic-gradient(#14b8a6, #2563eb calc(var(--speed-share) * 1%), var(--drive-track) 0);
   position: absolute;
   bottom: 7.5rem;
   left: 1rem;
   display: flex;
-  width: 6rem;
-  height: 6rem;
+  width: 5.75rem;
+  height: 5.75rem;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
+  background: radial-gradient(closest-side, var(--drive-panel-solid) 84%, transparent 85%), var(--ring);
+  box-shadow: var(--drive-shadow);
 }
 
 .drive-speed strong {
-  font-size: 2.25rem;
-  font-weight: 300;
+  font-size: 2.125rem;
+  font-weight: 700;
   line-height: 1;
 }
 
 .drive-speed span {
   margin-top: 0.125rem;
-  color: var(--drive-gold);
+  color: var(--drive-subtle);
   font-size: 0.6875rem;
 }
 
@@ -478,7 +624,7 @@ body {
   gap: 1.5rem;
   overflow: hidden;
   border-radius: 1.25rem;
-  padding: 0.875rem 1.25rem;
+  padding: 0.9375rem 1.25rem 0.8125rem;
 }
 
 .drive-progress {
@@ -486,20 +632,21 @@ body {
   top: 0;
   right: 0;
   left: 0;
-  height: 3px;
-  background: rgb(255 255 255 / 0.08);
+  height: 5px;
+  background: var(--drive-track);
 }
 
 .drive-progress span {
   display: block;
   height: 100%;
-  background: linear-gradient(90deg, #cdb67e, #f4ead0);
+  border-radius: 0 999px 999px 0;
+  background: linear-gradient(90deg, #14b8a6, #2563eb);
 }
 
 .drive-dock-road {
   overflow: hidden;
   font-size: 1.125rem;
-  font-weight: 600;
+  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -510,27 +657,59 @@ body {
 }
 
 .drive-stats dt {
-  color: rgb(247 243 232 / 0.6);
+  color: var(--drive-subtle);
   font-size: 0.75rem;
 }
 
 .drive-stats dd {
   font-size: 1.5rem;
-  font-weight: 400;
+  font-weight: 700;
   line-height: 1.25;
   letter-spacing: -0.01em;
   white-space: nowrap;
 }
 
+.drive-stats > div:first-child dd {
+  color: var(--drive-accent-2);
+}
+
+.drive-exit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  border-radius: 999px;
+  background: #e11d48;
+  box-shadow: 0 6px 16px rgb(225 29 72 / 0.32);
+  padding: 0.5rem 1rem;
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background-color 0.15s ease;
+}
+
+.drive-exit svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.drive-exit:hover {
+  background: #be123c;
+}
+
 .drive-note {
   position: absolute;
-  right: 1rem;
-  bottom: 0.5rem;
-  left: 1rem;
-  color: rgb(247 243 232 / 0.75);
+  bottom: 0.375rem;
+  left: 50%;
+  width: max-content;
+  max-width: calc(100vw - 1rem);
+  border-radius: 999px;
+  background: var(--drive-panel);
+  padding: 0.0625rem 0.625rem;
+  color: var(--drive-text);
   font-size: 0.6875rem;
   text-align: center;
-  text-shadow: 0 1px 4px rgb(0 0 0 / 0.8);
+  transform: translateX(-50%);
 }
 
 .drive-arrived {
@@ -538,7 +717,7 @@ body {
   inset: 0;
   display: grid;
   place-items: center;
-  background: rgb(5 8 14 / 0.45);
+  background: rgb(15 30 60 / 0.3);
 }
 
 .drive-arrived > div {
@@ -551,28 +730,44 @@ body {
   text-align: center;
 }
 
-.drive-arrived svg {
-  color: var(--drive-gold);
+.drive-arrived-icon {
+  display: grid;
+  width: 3.5rem;
+  height: 3.5rem;
+  place-items: center;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #0b8478, #1e5fd6);
+  color: #fff;
 }
 
 .drive-shell .drive-arrived h2 {
   margin: 0;
   color: inherit;
   font-size: 1.5rem;
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1.3;
   letter-spacing: normal;
+}
+
+.drive-arrived .drive-exit {
+  margin-top: 0.5rem;
+  background: #1e5fd6;
+  box-shadow: 0 6px 16px rgb(30 95 214 / 0.32);
+}
+
+.drive-arrived .drive-exit:hover {
+  background: #1a4fb0;
 }
 
 .drive-shell .maplibregl-ctrl.maplibregl-ctrl-attrib,
 .drive-shell .maplibregl-ctrl-attrib.maplibregl-compact-show {
   margin-bottom: 7rem;
-  background: rgb(13 20 30 / 0.85);
-  color: #e2e8f0;
+  background: var(--drive-panel);
+  color: var(--drive-text);
 }
 
 .drive-shell .maplibregl-ctrl-attrib a {
-  color: #e2e8f0;
+  color: var(--drive-text);
 }
 
 @media (max-width: 760px) {
@@ -586,7 +781,18 @@ body {
     top: 0.5rem;
     left: 0.5rem;
     width: calc(100vw - 1rem);
-    padding: 0.875rem 1rem;
+  }
+
+  .drive-turn-main {
+    padding: 0.875rem 1rem 0.625rem;
+  }
+
+  .drive-turn-road {
+    padding: 0 1rem 0.625rem;
+  }
+
+  .drive-turn-then {
+    padding: 0.375rem 1rem;
   }
 
   .drive-turn-icon {
@@ -595,8 +801,8 @@ body {
   }
 
   .drive-turn-icon svg {
-    width: 2.5rem;
-    height: 2.5rem;
+    width: 2.375rem;
+    height: 2.375rem;
   }
 
   .drive-turn-distance {
@@ -610,7 +816,7 @@ body {
   }
 
   .drive-alerts {
-    top: 11.5rem;
+    top: 12rem;
     width: calc(100vw - 1rem);
     max-width: none;
   }
@@ -623,7 +829,7 @@ body {
   }
 
   .drive-speed strong {
-    font-size: 1.75rem;
+    font-size: 1.625rem;
   }
 
   .drive-dock {
@@ -632,7 +838,7 @@ body {
     left: 0.5rem;
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 0.5rem 0.75rem;
-    padding: 0.75rem 1rem;
+    padding: 0.875rem 1rem 0.75rem;
   }
 
   .drive-stats {

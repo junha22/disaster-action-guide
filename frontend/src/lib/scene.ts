@@ -10,15 +10,12 @@ export interface SceneSpec {
   title: string
   rainIntensity: number
   sky: [Rgb, Rgb, Rgb]
-  cover: number
-  shade: number
   fog: number
   wind: number
   ripple: number
   lightning: boolean
-  celestial: number
-  rainbow: number
-  mapTint: number
+  glow: number
+  mapOverlay: string
 }
 
 const CLEAR_SKY: Record<TimeOfDay, [Rgb, Rgb, Rgb]> = {
@@ -33,14 +30,14 @@ const GLOOMY_SKY: Record<TimeOfDay, [Rgb, Rgb, Rgb]> = {
   night: [[5, 7, 13], [11, 15, 24], [20, 26, 36]],
 }
 
-const KINDS: Record<SceneKind, Pick<SceneSpec, 'cover' | 'shade' | 'fog' | 'wind' | 'ripple' | 'lightning'> & { gloom: number; tint: number }> = {
-  clear: { gloom: 0, cover: 0.22, shade: 0, fog: 0, wind: 0.08, ripple: 0, lightning: false, tint: 0 },
-  overcast: { gloom: 0.72, cover: 0.9, shade: 0.65, fog: 0.14, wind: 0.1, ripple: 0, lightning: false, tint: 0.08 },
-  drizzle: { gloom: 0.42, cover: 0.55, shade: 0.28, fog: 0.06, wind: 0.08, ripple: 0.2, lightning: false, tint: 0.02 },
-  rain: { gloom: 0.62, cover: 0.75, shade: 0.5, fog: 0.1, wind: 0.13, ripple: 0.45, lightning: false, tint: 0.05 },
-  heavy: { gloom: 0.78, cover: 0.92, shade: 0.72, fog: 0.18, wind: 0.2, ripple: 0.7, lightning: false, tint: 0.08 },
-  downpour: { gloom: 0.9, cover: 1, shade: 0.88, fog: 0.34, wind: 0.32, ripple: 1, lightning: false, tint: 0.12 },
-  storm: { gloom: 1, cover: 1, shade: 1, fog: 0.4, wind: 0.42, ripple: 1, lightning: true, tint: 0.18 },
+const KINDS: Record<SceneKind, Pick<SceneSpec, 'fog' | 'wind' | 'ripple' | 'lightning'> & { gloom: number; tint: number }> = {
+  clear: { gloom: 0, fog: 0.06, wind: 0.08, ripple: 0, lightning: false, tint: 0 },
+  overcast: { gloom: 0.72, fog: 0.3, wind: 0.1, ripple: 0, lightning: false, tint: 0.05 },
+  drizzle: { gloom: 0.42, fog: 0.16, wind: 0.08, ripple: 0.2, lightning: false, tint: 0.01 },
+  rain: { gloom: 0.62, fog: 0.24, wind: 0.13, ripple: 0.45, lightning: false, tint: 0.03 },
+  heavy: { gloom: 0.78, fog: 0.3, wind: 0.2, ripple: 0.7, lightning: false, tint: 0.05 },
+  downpour: { gloom: 0.9, fog: 0.42, wind: 0.32, ripple: 1, lightning: false, tint: 0.07 },
+  storm: { gloom: 1, fog: 0.46, wind: 0.42, ripple: 1, lightning: true, tint: 0.1 },
 }
 
 const RANK: SceneKind[] = ['drizzle', 'rain', 'heavy', 'downpour', 'storm']
@@ -77,9 +74,9 @@ export function weatherScene(rainMm: number, level: number, time: TimeOfDay): Sc
     title: rainTitle(rainMm),
     rainIntensity: Math.min(rainMm / 100, 1),
     sky: [0, 1, 2].map(i => mix(CLEAR_SKY[time][i], GLOOMY_SKY[time][i], gloom)) as [Rgb, Rgb, Rgb],
-    celestial: Math.max(0, 1 - gloom * 1.6),
-    rainbow: kind === 'drizzle' && time === 'day' ? 1 : 0,
-    mapTint: tint,
+    glow: Math.max(0, 1 - gloom * 1.6),
+    // Sunset warms the map even in dry weather; otherwise only rain darkens it, and only slightly.
+    mapOverlay: time === 'sunset' ? `rgb(150 80 50 / ${Math.max(tint, 0.1)})` : `rgb(6 10 20 / ${tint})`,
   }
 }
 

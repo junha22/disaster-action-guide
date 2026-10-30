@@ -70,7 +70,7 @@ export default function WeatherPanel(props: Props) {
           </div>
         </div>
 
-        <div className="mt-16 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+        <div className="mt-7 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
           <span className="flex items-center gap-1 text-white/90"><MapPin className="size-3.5" />광주광역시</span>
           {loading && <Loader2 className="size-4 animate-spin text-white/80" aria-label="불러오는 중" />}
           {!loading && (demoMode

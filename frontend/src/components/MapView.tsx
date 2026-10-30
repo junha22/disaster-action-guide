@@ -2,25 +2,29 @@ import { useEffect, useRef, useState } from 'react'
 import { LngLatBounds, MapLibreMap, Marker, NavigationControl } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
+import { retryStyleOnFailure, type MapTheme } from '@/lib/mapTheme'
 import '@/lib/mapWorker'
 
 import RiskLayer from '@/components/RiskLayer'
 import type { AppConfig, LineGeometry, LonLat, Place, ZoneFeatureCollection, ZoneGroup } from '@/lib/types'
 
 // OpenFreeMap: no API key. The default attribution control stays on (requirement 6.1).
-const STYLE_URL = 'https://tiles.openfreemap.org/styles/fiord'
 const GWANGJU: LonLat = [126.85, 35.16]
 
-const LINES = [
-  { id: 'route-alternatives', color: '#c4b5fd', width: 3, dash: undefined as number[] | undefined, opacity: 0.7 },
-  { id: 'route-baseline', color: '#e2e8f0', width: 3.5, dash: [0.5, 2], opacity: 0.9 },
-  { id: 'route-main', color: '#34d399', width: 6, dash: undefined, opacity: 1 },
-]
+function lineLayers(theme: MapTheme) {
+  return [
+    { id: 'route-alternatives', color: theme.alternatives, width: 3, dash: undefined as number[] | undefined, opacity: 0.7 },
+    { id: 'route-baseline', color: theme.baseline, width: 3.5, dash: [0.5, 2], opacity: 0.9 },
+    { id: 'route-main', color: '#10b981', width: 6, dash: undefined, opacity: 1 },
+  ]
+}
 // Keeps the route readable over bright roads and the rain overlay.
 const ROUTE_CASING = { id: 'route-main-casing', color: '#022c22', width: 10 }
 const CARD_SPACE_PX = 390
 
 interface Props {
+  // Fixed for one map instance: the parent remounts this component when the theme changes.
+  theme: MapTheme
   zones: ZoneFeatureCollection | null
   config: Pick<AppConfig, 'zone_types' | 'zone_groups'> | null
   highlightGroups: ZoneGroup[]
@@ -48,17 +52,18 @@ function setLines(map: MapLibreMap, id: string, lines: LineGeometry[]) {
 }
 
 export default function MapView(props: Props) {
-  const { zones, config, highlightGroups, passedZoneIds, floatingCard, route, baseline, alternatives, showBaseline,
+  const { theme, zones, config, highlightGroups, passedZoneIds, floatingCard, route, baseline, alternatives, showBaseline,
     origin, destination } = props
   const container = useRef<HTMLDivElement>(null)
   const [map, setMap] = useState<MapLibreMap | null>(null)
 
   useEffect(() => {
     if (!container.current) return
-    const instance = new MapLibreMap({ container: container.current, style: STYLE_URL, center: GWANGJU, zoom: 11.2 })
+    const instance = new MapLibreMap({ container: container.current, style: theme.styleUrl, center: GWANGJU, zoom: 11.2 })
     instance.addControl(new NavigationControl({ showCompass: false }), 'top-right')
+    retryStyleOnFailure(instance, theme.styleUrl)
     instance.on('load', () => {
-      for (const line of LINES) {
+      for (const line of lineLayers(theme)) {
         instance.addSource(line.id, { type: 'geojson', data: collection([]) })
         if (line.id === 'route-main') {
           instance.addLayer({
@@ -79,7 +84,7 @@ export default function MapView(props: Props) {
       setMap(instance)
     })
     return () => instance.remove()
-  }, [])
+  }, [theme])
 
   useEffect(() => {
     if (!map) return
