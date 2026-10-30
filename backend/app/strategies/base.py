@@ -86,10 +86,12 @@ class Explanation:
     message: str
     warning: str | None = None
     failure_reason: str | None = None
+    baseline_passed_zones: list[dict] = field(default_factory=list)  # input for the AI explanation
 
     def as_dict(self) -> dict[str, Any]:
         return {"status": self.status, "level": self.level, "avoid_types": list(self.avoid_types),
                 "avoided_zones": self.avoided_zones, "passed_zones": self.passed_zones,
+                "baseline_passed_zones": self.baseline_passed_zones,
                 "added_duration_s": self.added_duration_s, "added_distance_m": self.added_distance_m,
                 "message": self.message, "warning": self.warning, "failure_reason": self.failure_reason}
 
@@ -169,6 +171,7 @@ def make_plan(ctx: StrategyContext, *, route: ScoredRoute, baseline: ScoredRoute
     explanation = Explanation(
         status=status, level=ctx.weather.level, avoid_types=ordered_types(avoid_types),
         avoided_zones=avoided, passed_zones=[p.as_dict() for p in route.exposure.passes],
+        baseline_passed_zones=[p.as_dict() for p in baseline.exposure.passes],
         added_duration_s=round(route.osrm["duration"] - baseline.osrm["duration"], 1),
         added_distance_m=round(route.osrm["distance"] - baseline.osrm["distance"], 1),
         message=message or MESSAGES.get(status, ""), warning=warning, failure_reason=failure_reason)

@@ -3,8 +3,8 @@ param(
     [string]$CondaEnv = 'disaster-action-guide'
 )
 # Local API in the conda env (replaces dev-backend.ps1 for this project).
-# Mock AI, local DB under .local-data/. Optional keys are read from this window's environment only:
-#   $env:KAKAO_REST_API_KEY = '...'; $env:KMA_SERVICE_KEY = '...'
+# Mock AI, local DB under .local-data/. Optional keys go in backend/.env (see backend/.env.example).
+# Values set in this window ($env:KAKAO_REST_API_KEY = '...') win over the file.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 

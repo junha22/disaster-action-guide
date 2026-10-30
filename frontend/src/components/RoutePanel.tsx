@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle2, Loader2, Navigation, ShieldAlert } from 'lucide-react'
 
+import RouteExplanation from '@/components/RouteExplanation'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -95,6 +96,8 @@ export default function RoutePanel(props: Props) {
               <dd className="font-medium">{formatDuration(result.metrics.route.duration_s)}</dd>
             </dl>
           </div>
+
+          <RouteExplanation result={result} />
 
           <div className="space-y-2 rounded-lg border p-3" aria-label="회피 근거">
             <p className="flex items-center gap-2 text-sm font-medium">

@@ -60,8 +60,8 @@ def test_every_strategy_returns_the_same_osrm_plan_shape(name):
         assert route["geometry"]["type"] == "LineString"
         assert {"distance", "duration", "weight", "weight_name", "legs"} <= set(route)
     assert set(data["explanation"]) == {"status", "level", "avoid_types", "avoided_zones", "passed_zones",
-                                        "added_duration_s", "added_distance_m", "message", "warning",
-                                        "failure_reason"}
+                                        "baseline_passed_zones", "added_duration_s", "added_distance_m",
+                                        "message", "warning", "failure_reason"}
     assert set(data["metrics"]) == {"route", "baseline", "alternatives"}
     reference, _ = run("baseline", rn1=75)
     assert shape_of(data["route"]) == shape_of(reference.to_dict()["route"])
