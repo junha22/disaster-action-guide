@@ -3,11 +3,9 @@ import { CloudRainWind, Loader2, Sparkles } from 'lucide-react'
 
 import { api } from '@/lib/api'
 import { formatDuration, signed } from '@/lib/format'
-import { rerouteExplainBody } from '@/lib/reroute'
+import { rerouteExplainBody, spokenRerouteSummary } from '@/lib/reroute'
 import type { RainState, RerouteExplainResult, RerouteResult, RerouteSide } from '@/lib/types'
 
-// The explanation is read aloud when it arrives, but the driver is not kept waiting for a slow one.
-const VOICE_WAIT_MS = 4000
 const ASK = '경로를 변경할까요?'
 
 interface Props {
@@ -47,33 +45,23 @@ export default function RerouteCard({ decision, previous, cardRef, onSpeak, onAc
   const [explained, setExplained] = useState<RerouteExplainResult | null>(null)
   const [pending, setPending] = useState(true)
 
+  // The short spoken version goes out at once; the AI wording only fills the card.
+  useEffect(() => {
+    onSpeak(`${spokenRerouteSummary(decision)} ${ASK}`)
+  }, [decision, onSpeak])
+
   useEffect(() => {
     const controller = new AbortController()
-    let spoken = false
-    const speakOnce = (text: string) => {
-      if (spoken) return
-      spoken = true
-      onSpeak(`${text} ${ASK}`)
-    }
-    const timer = window.setTimeout(() => speakOnce(decision.text), VOICE_WAIT_MS)
     api.explainReroute(rerouteExplainBody(decision, previous), controller.signal)
       .then(data => {
-        if (controller.signal.aborted) return
-        setExplained(data)
-        speakOnce(data.text)
+        if (!controller.signal.aborted) setExplained(data)
       })
-      .catch(() => {
-        if (!controller.signal.aborted) speakOnce(decision.text)
-      })
+      .catch(() => undefined) // the computed text is already on the card
       .finally(() => {
-        window.clearTimeout(timer)
         if (!controller.signal.aborted) setPending(false)
       })
-    return () => {
-      controller.abort()
-      window.clearTimeout(timer)
-    }
-  }, [decision, previous, onSpeak])
+    return () => controller.abort()
+  }, [decision, previous])
 
   const ai = explained?.source === 'ai'
   const added = decision.candidate.duration_s - decision.current.duration_s
