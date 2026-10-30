@@ -39,15 +39,15 @@ def test_geometries_are_valid_polygons_inside_gwangju():
         assert SERVICE_BBOX[1] <= miny and maxy <= SERVICE_BBOX[3]
 
 
-def test_every_type_has_an_active_zone_and_dummies_are_marked():
+def test_only_real_public_data_is_shipped():
+    # The hand-drawn dummy zones were removed; types without real data have no zones yet.
     layer = RiskLayer.from_geojson(DATA)
-    assert {z.type for z in layer.active()} == set(ZONE_TYPES)
+    assert {z.type for z in layer.active()} <= set(ZONE_TYPES)
     for zone in layer.zones:
-        if zone.is_dummy:
-            assert "더미" in zone.source_name and "더미" in zone.name
-        else:  # real public data (data_pipeline/sources/gwangju_flood_zones.geojson)
-            assert "더미" not in zone.source_name and "더미" not in zone.name
-            assert zone.source_url.startswith("https://www.data.go.kr/")
+        assert not zone.is_dummy
+        assert "더미" not in zone.source_name and "더미" not in zone.name
+        assert zone.source_url.startswith("https://www.data.go.kr/")
+    assert layer.to_geojson()["metadata"]["has_dummy"] is False
 
 
 def test_real_flood_history_zones_are_included():

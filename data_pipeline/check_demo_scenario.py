@@ -50,7 +50,8 @@ def main() -> int:
         geometries.append(p.route.osrm["geometry"]["coordinates"])
     distinct = all(geometries[i] != geometries[i - 1] for i in range(1, 4))
     print("SCENARIO_A_ALL_STEPS_DIFFER" if distinct else "SCENARIO_A_SOME_STEPS_EQUAL")
-    d = plan(engine, "tiered_rain", 35, origin, point("농성지하차도"))
+    # 상무역 lies in flood zone FLD-SEO-0087; flood zones are all hard from level 3 (design.md 4.4).
+    d = plan(engine, "tiered_rain", 75, origin, point("상무역"))
     print("scenario D:", d.explanation.status, "|", d.explanation.failure_reason)
     return 0 if distinct and d.explanation.status == "avoid_failed" else 1
 
