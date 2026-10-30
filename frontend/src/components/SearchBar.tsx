@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { Loader2, LocateFixed, MapPin, Search, X } from 'lucide-react'
+import { Loader2, LocateFixed, Search, X } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -87,13 +87,11 @@ export default function SearchBar({ id, label, value, onChange, demoPoints, bbox
 
   return (
     <div className="space-y-2">
-      <Label htmlFor={`${id}-query`}>{label}</Label>
+      <Label htmlFor={`${id}-query`} className="route-label"><span className={`route-dot route-dot-${id}`} />{label}</Label>
       {value ? (
-        <div className="flex items-start justify-between gap-2 rounded-lg border bg-muted/40 px-3 py-2">
+        <div className="flex items-start justify-between gap-2 pl-[18px]">
           <div className="min-w-0">
-            <p className="flex items-center gap-1.5 truncate font-medium">
-              <MapPin className="size-4 shrink-0" />{value.name}
-            </p>
+            <p className="truncate font-semibold">{value.name}</p>
             {value.address && <p className="truncate text-xs text-muted-foreground">{value.address}</p>}
           </div>
           <Button type="button" variant="ghost" size="icon-sm" aria-label={`${label} 지우기`}

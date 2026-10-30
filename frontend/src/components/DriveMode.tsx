@@ -1,22 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { MapLibreMap, Marker } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import {
-  ArrowUp, ArrowUpLeft, ArrowUpRight, CornerUpLeft, CornerUpRight, Flag, GitMerge, Navigation, RotateCw,
-  ShieldAlert, ShieldCheck, Undo2, X, type LucideIcon,
+  ArrowUp, ArrowUpLeft, ArrowUpRight, Cloud, CloudDrizzle, CloudLightning, CloudRain, CloudRainWind, CornerUpLeft,
+  CornerUpRight, Flag, GitMerge, Moon, Navigation, RotateCw, ShieldAlert, ShieldCheck, Sun, Undo2, X, type LucideIcon,
 } from 'lucide-react'
 
 import WeatherCanvas from '@/components/WeatherCanvas'
-import { Button } from '@/components/ui/button'
 import {
   STEP_LABELS, buildTrack, headingAt, placeSteps, placeZones, pointAt, splitTrack, stepIndexAt, type PlacedStep,
 } from '@/lib/drive'
 import { formatDistance, formatDuration } from '@/lib/format'
+import { mapThemeFor, retryStyleOnFailure } from '@/lib/mapTheme'
 import '@/lib/mapWorker'
-import type { SceneSpec } from '@/lib/scene'
+import type { SceneKind, SceneSpec } from '@/lib/scene'
 import type { GuidanceStep, LineGeometry, LonLat, Place, RouteResult, StepKind, ZoneFeatureCollection } from '@/lib/types'
 
-const STYLE_URL = 'https://tiles.openfreemap.org/styles/fiord'
 
 const STEP_ICONS: Record<StepKind, LucideIcon> = {
   depart: Navigation,
@@ -32,6 +31,17 @@ const STEP_ICONS: Record<StepKind, LucideIcon> = {
   merge: GitMerge,
   roundabout: RotateCw,
 }
+const WEATHER_ICONS: Record<SceneKind, LucideIcon> = {
+  clear: Sun,
+  overcast: Cloud,
+  drizzle: CloudDrizzle,
+  rain: CloudRain,
+  heavy: CloudRainWind,
+  downpour: CloudRainWind,
+  storm: CloudLightning,
+}
+// Full scale of the speed ring.
+const SPEED_RING_MAX_KPH = 120
 const PLAYBACK_RATES = [1, 4, 12]
 const DEFAULT_RATE = 4
 const FALLBACK_SPEED_KPH = 40
@@ -68,7 +78,7 @@ function speedAt(steps: PlacedStep[], distance: number, fallback: number) {
 function vehicleElement() {
   const element = document.createElement('div')
   element.className = 'drive-vehicle'
-  element.innerHTML = '<svg viewBox="0 0 48 48" width="52" height="52" aria-hidden="true"><path d="M24 4 41 42 24 33 7 42Z" fill="#f4ecd8" stroke="#0b1320" stroke-width="2.5" stroke-linejoin="round"/></svg>'
+  element.innerHTML = '<svg viewBox="0 0 48 48" width="52" height="52" aria-hidden="true"><path d="M24 4 41 42 24 33 7 42Z" fill="#2563eb" stroke="#fff" stroke-width="3.5" stroke-linejoin="round"/></svg>'
   return element
 }
 
@@ -89,6 +99,8 @@ export default function DriveMode({ result, steps, scene, zones, destination, on
     .filter(zone => zone.gap < AVOIDED_MAX_GAP_M), [zones, result, track])
   const averageKph = result.route.duration > 0 ? (track.length / result.route.duration) * 3.6 : FALLBACK_SPEED_KPH
 
+  // Chosen when the drive starts: swapping styles mid-drive would drop the route layers.
+  const [theme] = useState(() => mapThemeFor(scene.time))
   const container = useRef<HTMLDivElement>(null)
   const atRef = useRef(0)
   const rateRef = useRef(DEFAULT_RATE)
@@ -103,7 +115,7 @@ export default function DriveMode({ result, steps, scene, zones, destination, on
   useEffect(() => {
     if (!container.current) return
     const map = new MapLibreMap({
-      container: container.current, style: STYLE_URL, zoom: CAMERA.zoom, pitch: CAMERA.pitch,
+      container: container.current, style: theme.styleUrl, zoom: CAMERA.zoom, pitch: CAMERA.pitch,
       center: track.coordinates[0], interactive: false, attributionControl: { compact: true },
     })
     const marker = new Marker({ element: vehicleElement(), rotationAlignment: 'map', pitchAlignment: 'map' })
@@ -116,8 +128,7 @@ export default function DriveMode({ result, steps, scene, zones, destination, on
     let ready = false
     let moving = false
 
-    map.on('error', () => {
-      if (map.isStyleLoaded()) return
+    retryStyleOnFailure(map, theme.styleUrl, () => {
       setMapError(true)
       moving = true // keep the guidance running even without a base map
     })
@@ -129,16 +140,18 @@ export default function DriveMode({ result, steps, scene, zones, destination, on
       map.addLayer({ id: 'drive-zones-fill', type: 'fill', source: 'drive-zones', paint: { 'fill-color': '#f59e0b', 'fill-opacity': 0.28 } })
       map.addLayer({ id: 'drive-zones-line', type: 'line', source: 'drive-zones', paint: { 'line-color': '#fbbf24', 'line-width': 1.5, 'line-opacity': 0.8 } })
       const line = { 'line-cap': 'round', 'line-join': 'round' } as const
-      map.addLayer({ id: 'drive-done', type: 'line', source: 'drive-done', layout: line, paint: { 'line-color': '#94a3b8', 'line-width': 9, 'line-opacity': 0.4 } })
-      map.addLayer({ id: 'drive-left-glow', type: 'line', source: 'drive-left', layout: line, paint: { 'line-color': '#34d399', 'line-width': 20, 'line-blur': 12, 'line-opacity': 0.5 } })
-      map.addLayer({ id: 'drive-left-casing', type: 'line', source: 'drive-left', layout: line, paint: { 'line-color': '#022c22', 'line-width': 13 } })
-      map.addLayer({ id: 'drive-left', type: 'line', source: 'drive-left', layout: line, paint: { 'line-color': '#34d399', 'line-width': 9 } })
+      map.addLayer({ id: 'drive-done', type: 'line', source: 'drive-done', layout: line, paint: { 'line-color': theme.travelled, 'line-width': 9, 'line-opacity': 0.5 } })
+      map.addLayer({ id: 'drive-left-glow', type: 'line', source: 'drive-left', layout: line, paint: { 'line-color': '#2dd4bf', 'line-width': 22, 'line-blur': 12, 'line-opacity': 0.55 } })
+      map.addLayer({ id: 'drive-left-casing', type: 'line', source: 'drive-left', layout: line, paint: { 'line-color': theme.name === 'light' ? '#0f766e' : '#042f2e', 'line-width': 13 } })
+      map.addLayer({ id: 'drive-left', type: 'line', source: 'drive-left', layout: line, paint: { 'line-color': '#2dd4bf', 'line-width': 9 } })
       // 3D buildings when the style's vector source has them; the map still works without.
-      if (map.getSource('openmaptiles')) {
+      // Some styles already have their own.
+      const hasBuildings = map.getStyle().layers.some(layer => layer.type === 'fill-extrusion')
+      if (!hasBuildings && map.getSource('openmaptiles')) {
         map.addLayer({
           id: 'drive-buildings', type: 'fill-extrusion', source: 'openmaptiles', 'source-layer': 'building', minzoom: 15,
           paint: {
-            'fill-extrusion-color': '#2b3650',
+            'fill-extrusion-color': theme.buildings,
             'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 8],
             'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
             'fill-extrusion-opacity': 0.82,
@@ -182,7 +195,7 @@ export default function DriveMode({ result, steps, scene, zones, destination, on
       map.remove()
     }
     // The map lives for one drive. The playback rate goes through a ref so changing it keeps the map.
-  }, [track, placedSteps, averageKph, zones])
+  }, [track, placedSteps, averageKph, zones, theme])
 
   const arrived = at >= track.length - 1
   const speed = arrived ? 0 : Math.round(speedAt(placedSteps, at, averageKph))
@@ -194,20 +207,21 @@ export default function DriveMode({ result, steps, scene, zones, destination, on
   const afterNext = stepIndex >= 0 ? placedSteps[stepIndex + 2] ?? null : null
   const nextKind: StepKind = next?.kind ?? (current ? 'arrive' : 'straight')
   const TurnIcon = STEP_ICONS[nextKind]
+  const WeatherIcon = scene.kind === 'clear' && scene.time === 'night' ? Moon : WEATHER_ICONS[scene.kind]
   const toNext = next ? Math.max(next.start - at, 0) : left
   const roadAhead = nextKind === 'arrive' ? destination?.name ?? '' : next?.name ?? ''
 
   const warning = passed.filter(z => z.at >= at && z.at - at <= WARN_AHEAD_M).sort((a, b) => a.at - b.at)[0]
-  const avoiding = avoided.find(z => Math.abs(z.at - at) <= AVOIDED_NEAR_M)
+  const avoiding = arrived ? undefined : avoided.find(z => Math.abs(z.at - at) <= AVOIDED_NEAR_M)
   const failed = result.explanation.status === 'avoid_failed'
 
   return (
-    <div className="drive-shell dark" data-testid="drive-mode" data-arrived={arrived}>
+    <div className="drive-shell" data-testid="drive-mode" data-arrived={arrived} data-map-theme={theme.name}>
       {/* A wrapper holds the size: maplibre's own CSS sets its container to position: relative. */}
       <div className="absolute inset-0">
         <div ref={container} className="h-full w-full" role="region" aria-label="운행 지도" />
       </div>
-      <div className="map-weather" style={{ backgroundColor: `rgb(6 10 20 / ${scene.mapTint})` }} aria-hidden="true">
+      <div className="map-weather" style={{ backgroundColor: scene.mapOverlay }} aria-hidden="true">
         <WeatherCanvas spec={scene} variant="map" />
       </div>
       <div className="drive-vignette" aria-hidden="true" />
@@ -228,7 +242,7 @@ export default function DriveMode({ result, steps, scene, zones, destination, on
       </section>
 
       <div className="drive-top-right">
-        <span className="drive-chip drive-glass">{scene.title} · 강수 {result.weather.level}단계</span>
+        <span className="drive-chip drive-glass"><WeatherIcon />{scene.title} · 강수 {result.weather.level}단계</span>
         <div className="drive-rate drive-glass" role="group" aria-label="시연 주행 배속">
           <span>시연 주행</span>
           {PLAYBACK_RATES.map(value => (
@@ -253,7 +267,8 @@ export default function DriveMode({ result, steps, scene, zones, destination, on
         )}
       </div>
 
-      <div className="drive-speed drive-glass" aria-label={`시연 속도 시속 ${speed}킬로미터`}>
+      <div className="drive-speed" aria-label={`시연 속도 시속 ${speed}킬로미터`}
+        style={{ '--speed-share': Math.min((speed / SPEED_RING_MAX_KPH) * 100, 100) } as CSSProperties}>
         <strong>{speed}</strong>
         <span>km/h</span>
       </div>
@@ -266,7 +281,7 @@ export default function DriveMode({ result, steps, scene, zones, destination, on
           <div><dt>남은 시간</dt><dd>{formatDuration(timeLeft)}</dd></div>
           <div><dt>남은 거리</dt><dd>{formatDistance(left)}</dd></div>
         </dl>
-        <Button type="button" variant="secondary" className="drive-exit" onClick={onExit}><X />안내 종료</Button>
+        <button type="button" className="drive-exit" onClick={onExit}><X />안내 종료</button>
       </section>
 
       <p className="drive-note">
@@ -276,10 +291,10 @@ export default function DriveMode({ result, steps, scene, zones, destination, on
       {arrived && (
         <div className="drive-arrived" role="status">
           <div className="drive-glass">
-            <Flag />
+            <span className="drive-arrived-icon"><Flag /></span>
             <h2>목적지에 도착했습니다</h2>
             <p>{destination?.name}</p>
-            <Button type="button" onClick={onExit}>경로 화면으로 돌아가기</Button>
+            <button type="button" className="drive-exit" onClick={onExit}>경로 화면으로 돌아가기</button>
           </div>
         </div>
       )}

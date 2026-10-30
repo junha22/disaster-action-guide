@@ -10,6 +10,7 @@ import WeatherPanel from '@/components/WeatherPanel'
 import { Button } from '@/components/ui/button'
 import { api, errorMessage } from '@/lib/api'
 import { avoidGroupsFor, rainLevel } from '@/lib/level'
+import { mapThemeFor } from '@/lib/mapTheme'
 import { useIsWide } from '@/lib/media'
 import { currentTimeOfDay, weatherScene, type TimeOfDay } from '@/lib/scene'
 import { dummyNotice } from '@/lib/zones'
@@ -53,6 +54,17 @@ function App() {
   // Level of the latest request; null until the first route is requested.
   const requestedLevel = useRef<number | null>(null)
   const isWide = useIsWide()
+  const asideRef = useRef<HTMLElement>(null)
+  const scrollToResult = useRef(false)
+  // Keeps the phone layout from jumping while a new result replaces the old one.
+  const phoneCardRef = useRef<HTMLDivElement>(null)
+  const [loadingCardHeight, setLoadingCardHeight] = useState(0)
+
+  useEffect(() => {
+    if (!result || isWide || !scrollToResult.current) return
+    scrollToResult.current = false
+    asideRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [result, isWide])
   const [clockTime, setClockTime] = useState<TimeOfDay>(() => currentTimeOfDay())
   const [timeChoice, setTimeChoice] = useState<TimeOfDay | null>(null)
   const [driveSteps, setDriveSteps] = useState<GuidanceStep[] | null>(null)
@@ -109,6 +121,7 @@ function App() {
     requestedLevel.current = levelFor(next)
     setBusy(true)
     setRouteError('')
+    setLoadingCardHeight(phoneCardRef.current?.offsetHeight ?? 0)
     setResult(null)  // requirement 6.8: clear the previous route first
     const body: RouteRequestBody = {
       origin: { lon: from.lon, lat: from.lat },
@@ -169,12 +182,14 @@ function App() {
   const sceneLevel = levelFor(choice)
   const sceneTime = timeChoice ?? clockTime
   const scene = useMemo(() => weatherScene(sceneRain, sceneLevel, sceneTime), [sceneRain, sceneLevel, sceneTime])
+  const mapTheme = mapThemeFor(sceneTime)
   const demoOrigin = demoPoints.find(p => p.name === DEMO_ROUTE.origin)
   const demoDestination = demoPoints.find(p => p.name === DEMO_ROUTE.destination)
 
   function startDemo() {
     if (!demoOrigin || !demoDestination) return
     const next = { ...choice, demoMode: true }
+    scrollToResult.current = true
     setOrigin(demoOrigin)
     setDestination(demoDestination)
     setChoice(next)
@@ -212,20 +227,30 @@ function App() {
       <div className="map-frame relative h-[45vh] shrink-0 lg:h-full lg:flex-1">
         <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">
           <Loader2 className="mr-2 size-4 animate-spin" />지도를 불러오는 중</div>}>
-          <MapView zones={zones} config={config ?? null} highlightGroups={highlightGroups}
+          <MapView key={mapTheme.name} theme={mapTheme} zones={zones} config={config ?? null} highlightGroups={highlightGroups}
             passedZoneIds={passedZoneIds} floatingCard={isWide && Boolean(result)}
             route={result?.route.geometry ?? null} baseline={result?.baseline.geometry ?? null}
             alternatives={alternatives} showBaseline={showBaseline} origin={origin} destination={destination} />
         </Suspense>
         {/* The tint stays light: the route and zones underneath must remain readable in any weather. */}
-        <div className="map-weather" style={{ backgroundColor: `rgb(6 10 20 / ${scene.mapTint})` }} aria-hidden="true">
+        <div className="map-weather" style={{ backgroundColor: scene.mapOverlay }} aria-hidden="true">
           <WeatherCanvas spec={scene} variant="map" />
         </div>
         {isWide && resultCard && <div className="result-float glass-card">{resultCard}</div>}
       </div>
 
-      <aside className="relative min-h-0 flex-1 overflow-y-auto lg:w-[400px] lg:flex-none">
+      <aside ref={asideRef} className="relative min-h-0 flex-1 overflow-y-auto lg:w-[400px] lg:flex-none">
         <div className="space-y-3 p-3 lg:p-0 lg:pr-1">
+          {!isWide && resultCard && (
+            <div className="glass-card" ref={phoneCardRef}>{resultCard}</div>
+          )}
+          {!isWide && !resultCard && busy && (
+            <div className="glass-card flex items-center justify-center gap-2 text-sm text-muted-foreground"
+              style={{ minHeight: loadingCardHeight || undefined }} role="status">
+              <Loader2 className="size-4 animate-spin" />경로 계산 중…
+            </div>
+          )}
+
           {loadError && (
             <p role="alert" className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
               {loadError}
@@ -248,23 +273,26 @@ function App() {
                 <Play />시연 경로 보기 · {DEMO_ROUTE.origin} → {DEMO_ROUTE.destination}
               </Button>
             )}
-            <section className="relative space-y-2" aria-label="출발지와 목적지">
-              <Button type="button" variant="ghost" size="icon-sm" className="absolute top-0 right-0 z-10"
-                aria-label="출발·목적지 바꾸기" title="출발·목적지 바꾸기" onClick={swap} disabled={!origin && !destination}>
-                <ArrowUpDown />
-              </Button>
+            <section className="route-fields" aria-label="출발지와 목적지">
               <SearchBar id="origin" label="출발지" value={origin} onChange={pick(setOrigin)} demoPoints={demoPoints}
                 bbox={config?.service_area_bbox ?? null} allowCurrentLocation />
+              <div className="route-divider">
+                <Button type="button" variant="ghost" size="icon-sm" className="route-swap"
+                  aria-label="출발·목적지 바꾸기" title="출발·목적지 바꾸기" onClick={swap} disabled={!origin && !destination}>
+                  <ArrowUpDown />
+                </Button>
+              </div>
               <SearchBar id="destination" label="목적지" value={destination} onChange={pick(setDestination)}
                 demoPoints={demoPoints} bbox={config?.service_area_bbox ?? null} />
             </section>
 
             <RoutePanel strategies={strategies} strategy={strategy} onStrategyChange={setStrategy}
               canSubmit={Boolean(origin && destination && strategy)} busy={busy}
-              onSubmit={() => void runRoute(choice)} error={routeError} />
+              onSubmit={() => {
+                scrollToResult.current = true
+                void runRoute(choice)
+              }} error={routeError} />
           </div>
-
-          {!isWide && resultCard && <div className="glass-card">{resultCard}</div>}
 
           <footer className="glass-card space-y-1.5 text-xs leading-5" role="note">
             <p className="text-muted-foreground">
