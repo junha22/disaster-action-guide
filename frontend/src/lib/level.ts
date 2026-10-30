@@ -29,12 +29,14 @@ export function typeCoverage(type: ZoneType, groups: ZoneGroup[], config: Pick<A
 
 // "지하차도(반드시), 침수 이력 우선 회피(반드시), 침수 이력 일반·주변보다 높은 편(되도록)".
 // A whole type is named once when all of its tiers share the same rule.
-export function avoidRuleText(level: number, config: Pick<AppConfig, 'zone_groups' | 'zone_types' | 'level_rules'>): string {
+export function avoidRuleText(level: number, config: Pick<AppConfig, 'zone_groups' | 'zone_types' | 'level_rules'>,
+  shownTypes: Set<ZoneType>): string {
   const rules = config.level_rules
   const soft = new Set(softGroupsFor(level, rules))
   const avoid = avoidGroupsFor(level, rules)
   const parts: string[] = []
   for (const type of Object.keys(config.zone_types) as ZoneType[]) {
+    if (!shownTypes.has(type)) continue
     const label = config.zone_types[type].label
     const mine = groupsOfType(type, config).filter(g => avoid.includes(g))
     if (mine.length === 0) continue

@@ -32,11 +32,12 @@ class WeatherContext:
     observed_at: str | None
     real_weather_applied: bool
     alert_status: str = "ok"  # "ok" | "failed" | "not_requested"
+    region: str | None = None  # where a real reading is from
 
     def as_dict(self) -> dict[str, Any]:
         return {"source": self.source, "rn1_mm": self.rn1_mm, "alert": self.alert, "level": self.level,
                 "observed_at": self.observed_at, "real_weather_applied": self.real_weather_applied,
-                "alert_status": self.alert_status}
+                "alert_status": self.alert_status, "region": self.region}
 
 
 @dataclass(frozen=True)
@@ -359,7 +360,12 @@ def soft_penalty(ctx: StrategyContext, route: ScoredRoute, soft: Sequence[str]) 
                for z in route.exposure.passes if z.zone.group in wanted)
 
 
-def _partial_message(ctx: StrategyContext, route: ScoredRoute, hard: Sequence[str],
+def _on_route(route: ScoredRoute, groups: Iterable[str]) -> list[str]:
+    """The groups the route passes. Saying a group was avoided means the route would have met it."""
+    return [g for g in groups if route.exposure.zone_ids((g,))]
+
+
+def _partial_message(ctx: StrategyContext, route: ScoredRoute, baseline: ScoredRoute, hard: Sequence[str],
                      soft: Sequence[str]) -> str:
     parts = []
     for label, members in _label_units(ctx, soft):
@@ -367,7 +373,8 @@ def _partial_message(ctx: StrategyContext, route: ScoredRoute, hard: Sequence[st
         if passes:
             parts.append(f"{label} 구역 {len(passes)}곳({round(sum(z.length_m for z in passes))}m)")
     tail = ", ".join(parts) + "은 지납니다."
-    return (f"{group_phrase(ctx, hard)} 구역은 모두 피했고, " + tail) if hard else tail
+    avoided = _on_route(baseline, hard)
+    return (f"{group_phrase(ctx, avoided)} 구역은 모두 피했고, " + tail) if avoided else tail
 
 
 def avoid_plan(ctx: StrategyContext, request: RouteRequest, hard: Iterable[str], soft: Iterable[str] = (),
@@ -375,7 +382,7 @@ def avoid_plan(ctx: StrategyContext, request: RouteRequest, hard: Iterable[str],
     """Never pass `hard` zones; pass `soft` zones only when the detour costs more than their penalty.
 
     `hard` and `soft` are avoidance groups or type names (all tiers of the type, design.md 5.8).
-    Falls back to the baseline with a warning when no candidate avoids every hard zone
+    When no candidate avoids every hard zone, returns the one passing the fewest, with a warning
     (requirement 4.9). Candidates come from common_candidates (design.md 5.7).
     """
     hard = expand_groups(hard)
@@ -390,7 +397,10 @@ def avoid_plan(ctx: StrategyContext, request: RouteRequest, hard: Iterable[str],
         return make_plan(ctx, route=baseline, baseline=baseline, status="nothing_on_route", **common)
 
     def failed(reason: str) -> RoutePlan:
-        return make_plan(ctx, route=baseline, baseline=baseline, status="avoid_failed", message=AVOID_FAILED,
+        # Soft zones and time break ties the way they do between valid routes.
+        fewest = min(pool.routes, key=lambda r: (len(r.exposure.zone_ids(hard)),
+                                                 r.osrm["duration"] + soft_penalty(ctx, r, soft)))
+        return make_plan(ctx, route=fewest, baseline=baseline, status="avoid_failed", message=AVOID_FAILED,
                          warning=AVOID_FAILED, failure_reason=reason, **common)
 
     hard_polygons = [p for p in pool.polygons if p.zone.group in hard]
@@ -407,7 +417,7 @@ def avoid_plan(ctx: StrategyContext, request: RouteRequest, hard: Iterable[str],
     ranked = sorted(valid, key=lambda r: r.osrm["duration"] + soft_penalty(ctx, r, soft))  # stable
     chosen = ranked[0]
     alternatives = ranked[1:1 + MAX_ALTERNATIVES]
-    phrase = group_phrase(ctx, groups)
+    phrase = group_phrase(ctx, _on_route(baseline, groups))
     if not chosen.exposure.zone_ids(soft):
         return make_plan(ctx, route=chosen, baseline=baseline, status="avoided", alternatives=alternatives,
                          message=f"{phrase} 구역을 피한 경로입니다.", **common)
@@ -417,5 +427,5 @@ def avoid_plan(ctx: StrategyContext, request: RouteRequest, hard: Iterable[str],
         clear_option = {"added_duration_s": round(clear[0].osrm["duration"] - chosen.osrm["duration"], 1),
                         "added_distance_m": round(clear[0].osrm["distance"] - chosen.osrm["distance"], 1)}
     return make_plan(ctx, route=chosen, baseline=baseline, status="partially_avoided", alternatives=alternatives,
-                     message=_partial_message(ctx, chosen, hard, soft), warning=PARTIAL_WARNING,
+                     message=_partial_message(ctx, chosen, baseline, hard, soft), warning=PARTIAL_WARNING,
                      clear_option=clear_option, **common)

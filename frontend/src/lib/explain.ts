@@ -18,5 +18,7 @@ export function explainBody(result: RouteResult): RouteExplainBody {
     alert: result.weather.alert,
     route: { duration_s: result.metrics.route.duration_s, zones: zones(e.passed_zones) },
     baseline: { duration_s: result.metrics.baseline.duration_s, zones: zones(e.baseline_passed_zones) },
+    hard_groups: e.hard_groups,
+    soft_groups: e.soft_groups,
   }
 }

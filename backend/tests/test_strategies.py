@@ -139,11 +139,12 @@ def assert_failed(plan, reason_part):
     assert e.status == "avoid_failed"
     assert e.warning == "위험 구역을 피하는 경로를 찾지 못했습니다."
     assert reason_part in e.failure_reason
-    assert plan.route is plan.baseline
-    assert {z["id"] for z in e.passed_zones} >= {"z-underpass"}  # zones the returned route passes
+    # Whatever the fake engine offers, the returned route never passes more hard zones than the fastest.
+    assert len(plan.route.exposure.zone_ids(e.hard_groups)) <= len(plan.baseline.exposure.zone_ids(e.hard_groups))
+    assert e.passed_zones  # the warning comes with the zones the returned route passes
 
 
-def test_destination_inside_zone_returns_baseline_with_warning():
+def test_destination_inside_zone_warns_and_passes_the_fewest():
     plan, fake = run("tiered_rain", rn1=35, request=RouteRequest(ORIGIN, (126.82, LAT)))
     assert_failed(plan, "목적지가 'z-underpass' 구역 안에 있습니다")
     assert max(len(c["exclude_polygons"]) for c in fake.calls) == 2  # flood + riverside, never the blocked zone
@@ -158,12 +159,12 @@ def test_no_route_after_exclusion_returns_baseline_with_warning():
     engine(limits=ExcludeLimits(max_perimeter_m=1e9, max_vertices=3)),
     engine(error=lambda call: ExcludeLimitExceeded() if call["exclude_polygons"] else None),
 ])
-def test_exclusion_limits_return_baseline_with_warning(fake):
+def test_exclusion_limits_warn_and_pass_the_fewest(fake):
     plan, _ = run("tiered_rain", rn1=75, fake=fake)
     assert_failed(plan, "경로 엔진이 처리하지 못했습니다")
 
 
-def test_unroutable_location_after_exclusion_returns_baseline_with_warning():
+def test_unroutable_location_after_exclusion_warns_and_passes_the_fewest():
     fake = engine(error=lambda call: LocationNotRoutable() if call["exclude_polygons"] else None)
     plan, _ = run("tiered_rain", rn1=75, fake=fake)
     assert_failed(plan, "근처 도로")
@@ -297,7 +298,7 @@ def test_soft_zone_is_passed_when_the_detour_costs_more_than_its_penalty():
     e = plan.explanation
     assert label_of(plan) == "avoid-u"  # underpass avoided, flood zone passed (cheaper than +1300 s)
     assert e.status == "partially_avoided" and e.warning == "일부 위험 구역을 지나는 경로입니다."
-    assert e.message.startswith("지하차도·침수 이력(우선 회피) 구역은 모두 피했고, 침수 이력(일반) 구역 1곳(")
+    assert e.message.startswith("지하차도 구역은 모두 피했고, 침수 이력(일반) 구역 1곳(")
     assert {z["id"] for z in e.passed_zones} >= {"z-flood_history"}
     assert [z["id"] for z in e.avoided_zones] == ["z-underpass"]
     # fastest candidate avoiding both types is avoid-uf (2000 s)
@@ -339,6 +340,17 @@ def test_candidates_from_earlier_rounds_are_kept():
 
 def detour_to(until_lon, lat):
     return [ORIGIN, (126.81, LAT), (126.81, lat), (until_lon, lat), (until_lon, LAT), DESTINATION]
+
+
+def test_when_nothing_avoids_all_the_route_passing_the_fewest_is_returned():
+    # Level 3 must avoid three zones. The fastest route passes all of them, the slower detour two.
+    rows = [CANDIDATES[0], {**CANDIDATES[1], "duration": 2000.0}]
+    plan, _ = run("tiered_rain", rn1=75, fake=engine(rows))
+    e = plan.explanation
+    assert e.status == "avoid_failed" and e.warning == "위험 구역을 피하는 경로를 찾지 못했습니다."
+    assert len(plan.baseline.exposure.zone_ids(e.hard_groups)) == 3 and plan.baseline.osrm["duration"] == 600.0
+    assert len(plan.route.exposure.zone_ids(e.hard_groups)) == 2 and plan.route.osrm["duration"] == 2000.0
+    assert e.added_duration_s == 1400.0 and len(e.baseline_passed_zones) == 3 and len(e.passed_zones) == 2
 
 
 def test_soft_zone_covering_the_destination_is_not_excluded():
@@ -387,13 +399,13 @@ def test_high_tier_is_hard_at_level_2_even_when_much_slower():
     rows = [*TIER_DETOUR[:2], {**TIER_DETOUR[2], "duration": 5000.0}, {**TIER_DETOUR[3], "duration": 5100.0}]
     plan, _ = run("tiered_rain", rn1=55, fake=engine(rows), layer=corridor_layer(flood_tier="high"))
     assert label_of(plan) == "avoid-uf" and plan.explanation.status == "avoided"
-    assert plan.explanation.message == "지하차도·침수 이력 구역을 피한 경로입니다."
+    assert plan.explanation.message == "지하차도·침수 이력(우선 회피) 구역을 피한 경로입니다."
 
 
 def test_partial_message_names_the_tier_that_is_passed():
     plan, _ = run("tiered_rain", rn1=55, fake=engine(TIER_DETOUR), layer=corridor_layer(flood_tier="raised"))
     e = plan.explanation
-    assert e.message.startswith("지하차도·침수 이력(우선 회피) 구역은 모두 피했고, 침수 이력(주변보다 높은 편) 구역 1곳(")
+    assert e.message.startswith("지하차도 구역은 모두 피했고, 침수 이력(주변보다 높은 편) 구역 1곳(")
     assert e.clear_option["added_duration_s"] == 250.0
     assert [z["id"] for z in e.avoided_zones] == ["z-underpass"]
 

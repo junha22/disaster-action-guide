@@ -15,19 +15,22 @@ from ..config import ZONE_GROUPS, AppConfig, rain_level
 from ..context.weather_kma import KmaWeatherService, get_weather_service
 from ..engines import get_engine
 from ..engines.base import EngineUnavailable, RoutingEngine
-from ..reroute import best_effort_plan, decide, remaining_route
+from ..reroute import decide, remaining_route
 from ..risk.geo import in_service_area
 from ..risk.layer import RiskLayer
 from ..route_explainer import (RerouteInput, UnknownZone, ZoneLength, explain_reroute, reroute_facts,
                                reroute_template)
 from ..strategies.base import RouteNotFound, RouteRequest, ScoredRoute, StrategyContext
 from ..strategies.params import ParamsError, resolve
-from ..strategies.registry import UnknownStrategy, get_strategy
+from ..strategies.registry import get_strategy
 from .deps import config_dep, layer_dep
 from .explain import UNKNOWN_ZONE, RouteSide, _zones, zone_labels
 from .route import ENGINE_DOWN, MAX_GUIDANCE_POINTS, NO_ROUTE, OUTSIDE, Point, WeatherOverride, timeout_s, weather_context
 
 router = APIRouter(prefix="/api/route", tags=["route"])
+# Worse rain is judged by the rain level's rules, whatever algorithm drew the route being driven:
+# baseline and rerank have no list of zones to avoid, which would read as "nothing to avoid".
+REROUTE_STRATEGY = "tiered_rain"
 
 
 class RerouteBody(BaseModel):
@@ -38,7 +41,6 @@ class RerouteBody(BaseModel):
     remaining: list[tuple[float, float]] = Field(min_length=2, max_length=MAX_GUIDANCE_POINTS)
     remaining_duration_s: float = Field(ge=0, le=172_800)
     previous: WeatherOverride  # the rain the current route was last checked against
-    strategy: str | None = Field(default=None, max_length=64)
     weather_override: WeatherOverride | None = None
 
     @field_validator("remaining")
@@ -70,25 +72,19 @@ def reroute(body: RerouteBody,
     destination = (body.destination.lon, body.destination.lat)
     if not (in_service_area(*origin) and in_service_area(*destination)):
         raise HTTPException(422, OUTSIDE)
-    name = body.strategy or config.default_strategy
-    try:
-        strategy = get_strategy(name)
-    except UnknownStrategy:
-        raise HTTPException(422, "등록되지 않은 알고리즘입니다") from None
+    strategy = get_strategy(REROUTE_STRATEGY)
     try:
         params = resolve(config, strategy.params_model, {})
     except ParamsError as exc:
         raise HTTPException(422, str(exc)) from None
     started = time.monotonic()
-    weather = weather_context(body.weather_override, weather_service, params)
+    weather = weather_context(body.weather_override, weather_service, params, origin)
     ctx = StrategyContext(weather=weather, layer=layer, engine=engine, params=params,
                           deadline=started + timeout_s(config))
     request = RouteRequest(origin, destination, body.heading)
     try:
         plan = strategy.plan(request, ctx)
         hard, soft = plan.explanation.hard_groups, plan.explanation.soft_groups
-        if plan.explanation.status == "avoid_failed":
-            plan = best_effort_plan(ctx, request, plan)
     except EngineUnavailable:
         raise HTTPException(503, ENGINE_DOWN) from None
     except RouteNotFound:

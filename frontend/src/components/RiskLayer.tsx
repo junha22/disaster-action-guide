@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { Popup, type ExpressionSpecification, type MapLibreMap, type MapLayerMouseEvent } from 'maplibre-gl'
 
 import { typeCoverage } from '@/lib/level'
-import { dummyNotice, zoneCenter } from '@/lib/zones'
+import { dummyNotice, zoneCenter, zoneTypesWithData } from '@/lib/zones'
 import type { AppConfig, ZoneFeatureCollection, ZoneGroup, ZoneProperties, ZoneType } from '@/lib/types'
 
 const SOURCE = 'risk-zones'
@@ -55,7 +55,7 @@ function popupContent(p: ZoneProperties, typeLabel: string, tierLabel: string | 
   const rows: [string, string][] = [['유형', typeLabel]]
   // Terrain tier (design.md 5.8): decides from which rain level the zone is avoided. Not a safety grade.
   const reason = present(p.tier_reason)
-  if (tierLabel) rows.push(['회피 등급', reason ? `${tierLabel} (${reason})` : tierLabel])
+  if (tierLabel) rows.push(['회피 등급', reason && reason !== tierLabel ? `${tierLabel} (${reason})` : tierLabel])
   const count = numberOrNull(p.flood_count)
   if (count !== null) rows.push(['침수 기록', `${count}개 연도`])
   const elev = numberOrNull(p.elev_m)
@@ -165,11 +165,12 @@ export default function RiskLayer({ map, zones, zoneTypes, zoneGroups, highlight
   }, [map, highlightGroups, passedZoneIds, zoneTypes])
 
   const groupConfig = { zone_groups: zoneGroups }
+  const shownTypes = zoneTypesWithData(zones)
   return (
     <div className="pointer-events-none absolute top-2 left-2 z-10 max-w-[calc(100%-4rem)] rounded-lg bg-background/80 p-2 text-[11px] leading-4 shadow ring-1 ring-foreground/10 backdrop-blur lg:top-auto lg:bottom-2 lg:p-2.5 lg:text-xs">
       <p className="mb-1 font-medium">위험 구역</p>
       <ul className="flex flex-wrap gap-x-3 gap-y-1">
-        {(Object.keys(zoneTypes) as ZoneType[]).map(type => {
+        {(Object.keys(zoneTypes) as ZoneType[]).filter(type => shownTypes.has(type)).map(type => {
           const coverage = typeCoverage(type, highlightGroups, groupConfig)
           return (
             <li key={type} className="flex items-center gap-2">

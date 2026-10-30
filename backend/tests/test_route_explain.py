@@ -168,6 +168,10 @@ def test_unknown_zone_or_model_is_rejected(client):
     (avoided_body(status="avoid_failed", route={"duration_s": 600, "zones": [{"id": "z-underpass", "length_m": 200}]},
                   baseline={"duration_s": 600, "zones": [{"id": "z-underpass", "length_m": 200}]}),
      "위험 구간을 모두 피하는 경로를 찾지 못해 일반 경로를 보여드려요. 이 경로는 위험 구간 1곳을 지나요."),
+    (avoided_body(status="avoid_failed", route={"duration_s": 900, "zones": [{"id": "z-riverside", "length_m": 90}]},
+                  hard_groups=["underpass", "flood_history.normal", "riverside"]),
+     "위험 구간을 모두 피하는 경로를 찾지 못해 가장 적게 지나는 경로를 보여드려요. "
+     "일반 경로는 반드시 피할 구간 3곳을 지나요. 추천 경로는 5분 더 걸리고 반드시 피할 구간 1곳을 지나요."),
     (avoided_body(fallback_engine=True),
      "기본 후보 경로가 모두 위험 구역을 지나 다른 경로 엔진으로 따로 계산했어요. "
      "일반 경로는 위험 구간 3곳을 지나요. 추천 경로는 5분 더 걸리지만 알려진 위험 구간을 지나지 않아요."),

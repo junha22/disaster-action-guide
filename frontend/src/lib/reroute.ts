@@ -15,7 +15,11 @@ export function rerouteExplainBody(decision: RerouteResult, previous: RainState)
   }
 }
 
-// The zones the driver is asked about, for a sentence: "피할 구간 3곳".
+// The zones of the current route the driver is asked about.
+export function avoidIds(decision: RerouteResult): string[] {
+  return [...decision.current.hard_zone_ids, ...decision.current.soft_zone_ids]
+}
+
 export function avoidCount(decision: RerouteResult): number {
-  return decision.current.hard_zone_ids.length + decision.current.soft_zone_ids.length
+  return avoidIds(decision).length
 }

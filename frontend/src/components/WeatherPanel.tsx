@@ -8,8 +8,9 @@ import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { formatObserved } from '@/lib/format'
 import { ALERT_LABELS, avoidRuleText, rainLevel } from '@/lib/level'
+import { zoneTypesWithData } from '@/lib/zones'
 import type { SceneSpec, TimeOfDay } from '@/lib/scene'
-import type { Alert, AppConfig, WeatherInfo } from '@/lib/types'
+import type { Alert, AppConfig, RouteWeather, WeatherInfo, WeatherRegion, ZoneFeatureCollection } from '@/lib/types'
 
 interface Props {
   config: AppConfig | null
@@ -27,6 +28,13 @@ interface Props {
   onRainCommit: (value: number) => void
   alert: Alert
   onAlertChange: (alert: Alert) => void
+  regions: WeatherRegion[]
+  place: string
+  onPlaceChange: (place: string) => void
+  locating: boolean
+  locationNote: string
+  routeWeather: RouteWeather | null
+  zones: ZoneFeatureCollection | null
 }
 
 const ALERTS: Alert[] = ['none', 'advisory', 'warning']
@@ -40,15 +48,21 @@ const TIMES: { time: TimeOfDay; label: string; Icon: typeof Sun }[] = [
 
 export default function WeatherPanel(props: Props) {
   const { config, weather, loading, scene, dummyZonesNotice, timeChoice, onTimeChoiceChange, rainShown, demoMode,
-    onDemoModeChange, rain, onRainChange, onRainCommit, alert, onAlertChange } = props
+    onDemoModeChange, rain, onRainChange, onRainCommit, alert, onAlertChange, regions, place, onPlaceChange, locating,
+    locationNote, routeWeather, zones } = props
   const rules = config?.level_rules
   const available = Boolean(weather?.available)
   const level = rules
     ? demoMode ? rainLevel(rain, alert, rules) : (available ? weather?.level ?? 0 : 0)
     : null
   // e.g. "지하차도(반드시), 침수 이력 우선 회피(되도록)" (design.md 5.8)
-  const avoidText = config && level !== null ? avoidRuleText(level, config) : '없음'
+  const avoidText = config && level !== null ? avoidRuleText(level, config, zoneTypesWithData(zones)) : '없음'
   const activeAlert = demoMode ? alert : weather?.alert ?? 'none'
+  // Demo values belong to no place. After a failed reading the list stays, so another place can be tried.
+  const choosesPlace = regions.length > 0 && (!demoMode || !available)
+  const regionGroups = [...new Set(regions.map(r => r.group))]
+  const outsideRoutes = !demoMode && weather?.routable === false
+  const routeOtherPlace = !demoMode && routeWeather?.source === 'kma' && routeWeather.level !== weather?.level
 
   return (
     <section className="weather-hero" aria-labelledby="weather-title" data-kind={scene.kind} data-time={scene.time}>
@@ -71,8 +85,23 @@ export default function WeatherPanel(props: Props) {
         </div>
 
         <div className="mt-7 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-          <span className="flex items-center gap-1 text-white/90"><MapPin className="size-3.5" />광주광역시</span>
-          {loading && <Loader2 className="size-4 animate-spin text-white/80" aria-label="불러오는 중" />}
+          <span className="flex items-center gap-1 text-white/90">
+            <MapPin className="size-3.5" />
+            {choosesPlace ? (
+              <select className="location-select" aria-label="날씨 기준 위치" value={place}
+                onChange={event => onPlaceChange(event.target.value)}>
+                <option value="current">
+                  {place === 'current' && weather?.region ? `현재 위치 (${weather.region} 부근)` : '현재 위치'}
+                </option>
+                {regionGroups.map(group => (
+                  <optgroup key={group} label={group}>
+                    {regions.filter(r => r.group === group).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+            ) : '광주광역시'}
+          </span>
+          {(loading || locating) && <Loader2 className="size-4 animate-spin text-white/80" aria-label="불러오는 중" />}
           {!loading && (demoMode
             ? <span className="demo-pill">데모 값 · 실제 기상 아님</span>
             : <span className="text-white/80">기상청 · {formatObserved(weather?.observed_at ?? null)}</span>)}
@@ -87,9 +116,11 @@ export default function WeatherPanel(props: Props) {
           </p>
         </div>
 
+        {locationNote && <p role="status" className="mt-1 text-xs font-medium text-amber-200">{locationNote}</p>}
+
         {level !== null && (
           <p className="mt-2 text-sm text-white/95">
-            <strong>강수 {level}단계</strong> · 피하는 구역: {avoidText}
+            <strong>강수 {level}단계</strong> · {outsideRoutes ? '경로 안내는 광주 안에서만 돼요' : `피하는 구역: ${avoidText}`}
             {activeAlert !== 'none' && <strong className="ml-1.5 text-amber-300">{ALERT_LABELS[activeAlert]}</strong>}
           </p>
         )}
@@ -97,6 +128,12 @@ export default function WeatherPanel(props: Props) {
         {!loading && available && !demoMode && (
           <p className={`mt-1.5 text-xs ${weather?.alert_status === 'failed' ? 'font-medium text-amber-200' : 'text-white/85'}`}>
             호우 특보: {weather?.alert_label}
+          </p>
+        )}
+
+        {routeOtherPlace && routeWeather && (
+          <p className="mt-1 text-xs font-medium text-amber-200" data-testid="route-weather-note">
+            경로는 출발지{routeWeather.region ? `(${routeWeather.region})` : ''} 날씨로 계산했어요 · 강수 {routeWeather.level}단계
           </p>
         )}
 

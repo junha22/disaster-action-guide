@@ -7,7 +7,7 @@ No coordinates. Zone names and sources are looked up in the server's risk layer.
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..config import ZONE_GROUPS, ZONE_TYPES, AppConfig, group_tier, group_type
 from ..risk.layer import RiskLayer
@@ -39,6 +39,15 @@ class ExplainBody(BaseModel):
     route: RouteSide
     baseline: RouteSide
     fallback_engine: bool = False
+    hard_groups: list[str] = Field(default_factory=list, max_length=len(ZONE_GROUPS))
+    soft_groups: list[str] = Field(default_factory=list, max_length=len(ZONE_GROUPS))
+
+    @field_validator("hard_groups", "soft_groups")
+    @classmethod
+    def _known(cls, value: list[str]) -> list[str]:
+        if any(g not in ZONE_GROUPS for g in value):
+            raise ValueError("unknown group")
+        return value
 
 
 def _zones(side: RouteSide) -> tuple[ZoneLength, ...]:
@@ -58,7 +67,8 @@ def explain_route(body: ExplainBody,
     data = ExplainInput(status=body.status, level=body.level, alert=body.alert,
                         route_duration_s=body.route.duration_s, baseline_duration_s=body.baseline.duration_s,
                         route_zones=_zones(body.route), baseline_zones=_zones(body.baseline),
-                        fallback_engine=body.fallback_engine)
+                        fallback_engine=body.fallback_engine, hard_groups=tuple(body.hard_groups),
+                        soft_groups=tuple(body.soft_groups))
     labels, tier_labels = zone_labels(config)
     try:
         return explain(data, {z.id: z for z in layer.zones}, labels, tier_labels).as_dict()

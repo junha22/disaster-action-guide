@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api, errorMessage } from '@/lib/api'
+import { formatDistance } from '@/lib/format'
+import { locate } from '@/lib/location'
 import type { Place, SearchResult } from '@/lib/types'
 
 interface Props {
@@ -17,6 +19,9 @@ interface Props {
   bbox: [number, number, number, number] | null
   allowCurrentLocation?: boolean
 }
+
+// Beyond this the route may not start on the road the driver is on.
+const COARSE_ORIGIN_M = 500
 
 function inBox(lon: number, lat: number, bbox: [number, number, number, number]) {
   return bbox[0] <= lon && lon <= bbox[2] && bbox[1] <= lat && lat <= bbox[3]
@@ -65,21 +70,21 @@ export default function SearchBar({ id, label, value, onChange, demoPoints, bbox
     }
     setLocating(true)
     setHint('')
-    navigator.geolocation.getCurrentPosition(
+    locate(
       position => {
         setLocating(false)
-        const { longitude: lon, latitude: lat } = position.coords
+        const { longitude: lon, latitude: lat, accuracy } = position.coords
         if (bbox && !inBox(lon, lat, bbox)) {
           setHint('현재 위치가 광주광역시 밖입니다. 검색으로 출발지를 정하세요.')
           return
         }
         choose({ id: 'gps', name: '현재 위치', address: '', lon, lat, selectable: true, reason: null, source: 'gps' })
+        if (accuracy > COARSE_ORIGIN_M) setHint(`위치 오차가 약 ${formatDistance(accuracy)}입니다. 출발지가 실제와 다를 수 있습니다.`)
       },
       () => {
         setLocating(false)
         setHint('현재 위치를 가져오지 못했습니다. 검색이나 데모 지점으로 정하세요.')
       },
-      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 },
     )
   }
 

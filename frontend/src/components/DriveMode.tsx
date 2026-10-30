@@ -17,7 +17,7 @@ import { formatDistance, formatDuration, signed } from '@/lib/format'
 import { rainLevel } from '@/lib/level'
 import { mapThemeFor, retryStyleOnFailure } from '@/lib/mapTheme'
 import '@/lib/mapWorker'
-import { avoidCount } from '@/lib/reroute'
+import { avoidCount, avoidIds } from '@/lib/reroute'
 import { weatherScene, type SceneKind, type SceneSpec } from '@/lib/scene'
 import { speak, speechSupported, stopSpeaking } from '@/lib/speech'
 import type {
@@ -126,6 +126,19 @@ interface Notice {
   text: string
 }
 
+// A warning that holds while the zones it names are still ahead.
+interface StandingWarning {
+  tone: 'warn' | 'danger'
+  label: string
+  ids: string[]
+}
+
+// What the route screen needs to catch up with the drive.
+export interface DriveExit {
+  routeChanged: boolean
+  demoRain: RainState | null
+}
+
 interface Preview {
   current: LonLat[]
   candidate: LonLat[]
@@ -145,7 +158,7 @@ interface Props {
   zones: ZoneFeatureCollection | null
   destination: Place | null
   levelRules: LevelRules
-  onExit: () => void
+  onExit: (summary: DriveExit) => void
 }
 
 export default function DriveMode({ result, steps, scene, zones, destination, levelRules, onExit }: Props) {
@@ -167,6 +180,8 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
   const pausedRef = useRef(false)
   const previewRef = useRef<Preview | null>(null)
   const cardRef = useRef<HTMLElement>(null)
+  const turnRef = useRef<HTMLElement>(null)
+  const controlsRef = useRef<HTMLDivElement>(null)
   const [at, setAt] = useState(0)
   const [rate, setRate] = useState(DEFAULT_RATE)
   const [mapError, setMapError] = useState(false)
@@ -181,12 +196,12 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
   const abortRef = useRef<AbortController | null>(null)
   const [reroute, setReroute] = useState<Reroute>({ kind: 'idle' })
   const [notice, setNotice] = useState<Notice | null>(null)
+  const [standing, setStanding] = useState<StandingWarning | null>(null)
   const [voiceOn, setVoiceOn] = useState(true)
   const voiceRef = useRef(true)
 
   const level = rainLevel(rain.rn1_mm, rain.alert, levelRules)
   const driveScene = useMemo(() => weatherScene(rain.rn1_mm, level, scene.time), [rain, level, scene.time])
-  const strategy = result.strategy.name
 
   useEffect(() => {
     rateRef.current = rate
@@ -202,12 +217,13 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
     if (!voiceRef.current) stopSpeaking()
   }
 
-  const settle = useCallback((settled: RainState, message: Notice | null) => {
+  const settle = useCallback((settled: RainState, message: Notice | null, warning: StandingWarning | null = null) => {
     settledRainRef.current = settled
     pausedRef.current = false
     previewRef.current = null
     setReroute({ kind: 'idle' })
     setNotice(message)
+    setStanding(warning)
   }, [])
 
   const checkRoute = useCallback(async (next: RainState, useDemoValue: boolean) => {
@@ -223,6 +239,7 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
     pausedRef.current = true
     previewRef.current = null
     setNotice(null)
+    setStanding(null)
     setReroute({ kind: 'checking' })
     say(SPEAK_RAIN_WORSE, true)
     try {
@@ -234,7 +251,6 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
         remaining,
         remaining_duration_s: current.length > 0 ? duration * ((current.length - distance) / current.length) : 0,
         previous,
-        strategy,
         weather_override: useDemoValue ? next : null,
       }, controller.signal)
       if (decision.action === 'recommend') {
@@ -246,10 +262,11 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
         return
       }
       if (controller.signal.aborted) return
-      const count = avoidCount(decision)
-      settle(next, decision.action === 'keep'
-        ? { tone: 'safe', text: '남은 경로에 이번 단계에서 피할 구간이 없어요' }
-        : { tone: 'danger', text: `더 나은 경로를 찾지 못했어요 · 남은 길에 피할 구간 ${count}곳` })
+      if (decision.action === 'keep') {
+        settle(next, { tone: 'safe', text: '남은 경로에 이번 단계에서 피할 구간이 없어요' })
+      } else {
+        settle(next, null, { tone: 'danger', label: '더 나은 경로를 찾지 못했어요', ids: avoidIds(decision) })
+      }
       say(decision.text)
     } catch (e) {
       if (controller.signal.aborted) return
@@ -258,7 +275,7 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
       settle(previous, { tone: 'warn', text: `${errorMessage(e, '경로를 확인하지 못했어요')} · 지금 경로로 안내해요` })
       say('경로를 확인하지 못했어요. 지금 경로로 안내해요.')
     }
-  }, [levelRules, say, settle, strategy])
+  }, [levelRules, say, settle])
 
   const applyRain = useCallback((next: RainState, useDemoValue: boolean) => {
     const nextLevel = rainLevel(next.rn1_mm, next.alert, levelRules)
@@ -287,13 +304,14 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
     applyRain({ rn1_mm: mm, alert: 'none' }, true)
   }
 
-  // Real rain is re-read while driving unless the demo buttons took over. The server caches it for 10 minutes.
+  // Real rain is re-read at the car while driving, unless the demo buttons took over. The server caches it for 10 minutes.
   const followsKma = result.weather.source === 'kma'
   useEffect(() => {
     if (!followsKma) return
     const timer = window.setInterval(() => {
       if (demoRainRef.current) return
-      api.weather().then(data => {
+      const [lon, lat] = pointAt(navRef.current.track, atRef.current)
+      api.weatherAt({ lon, lat }).then(data => {
         if (demoRainRef.current || !data.available || data.rn1_mm === null) return
         applyRain({ rn1_mm: data.rn1_mm, alert: data.alert_status === 'ok' ? data.alert : 'none' }, false)
       }).catch(() => undefined) // the next check tries again
@@ -331,11 +349,17 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
   function declineReroute() {
     if (reroute.kind !== 'request') return
     const count = avoidCount(reroute.decision)
-    settle(rainRef.current, { tone: 'warn', text: `지금 경로를 유지해요 · 남은 길에 피할 구간 ${count}곳` })
+    settle(rainRef.current, null, { tone: 'warn', label: '지금 경로를 유지 중이에요', ids: avoidIds(reroute.decision) })
     say(`지금 경로를 유지해요. 남은 길에 피할 구간 ${count}곳이 있어요.`, true)
   }
 
   const speakExplanation = useCallback((text: string) => say(text), [say])
+
+  function finish() {
+    const start = result.weather
+    const rainChanged = rainRef.current.rn1_mm !== start.rn1_mm || rainRef.current.alert !== start.alert
+    onExit({ routeChanged: travelledRef.current.length > 0, demoRain: demoRainRef.current && rainChanged ? rainRef.current : null })
+  }
 
   useEffect(() => {
     if (!container.current) return
@@ -356,6 +380,8 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
     let shownTrack = first.track
     let shownPreview: Preview | null = null
     let cameraBusyUntil = 0
+    let padding: ReturnType<typeof followPadding> | null = null
+    let lastPadding = 0
 
     retryStyleOnFailure(map, theme.styleUrl, () => {
       setMapError(true)
@@ -395,8 +421,12 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
     })
 
     function followPadding(width: number, height: number) {
-      const topShare = width < NARROW_WIDTH_PX ? 0.22 : 0.42 // phones keep the car clear of the lower controls
-      return { top: height * topShare, bottom: 0, left: 0, right: 0 }
+      if (width >= NARROW_WIDTH_PX) return { top: height * 0.42, bottom: 0, left: 0, right: 0 }
+      // Phones: the car sits in the gap between the turn card and the controls, whatever their height.
+      const turn = turnRef.current?.getBoundingClientRect()
+      const controls = controlsRef.current?.getBoundingClientRect()
+      if (!turn?.height || !controls?.height) return { top: height * 0.22, bottom: 0, left: 0, right: 0 }
+      return { top: turn.bottom, bottom: Math.max(height - controls.top, 0), left: 0, right: 0 }
     }
 
     // While the driver is asked, the map shows both routes from above with the current one in amber.
@@ -450,7 +480,11 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
       const width = container.current?.clientWidth ?? 1200
       if (ready && previewRef.current !== shownPreview) showPreview(previewRef.current, position, width, height, now)
       if (!shownPreview && now >= cameraBusyUntil) {
-        map.jumpTo({ center: position, bearing: heading, padding: followPadding(width, height) })
+        if (!padding || now - lastPadding > LINE_UPDATE_MS) {
+          padding = followPadding(width, height)
+          lastPadding = now
+        }
+        map.jumpTo({ center: position, bearing: heading, padding })
       }
       if (ready && now - lastLine > LINE_UPDATE_MS) {
         lastLine = now
@@ -490,6 +524,7 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
   const warning = passed.filter(z => z.at >= at && z.at - at <= WARN_AHEAD_M).sort((a, b) => a.at - b.at)[0]
   const avoiding = arrived ? undefined : avoided.find(z => Math.abs(z.at - at) <= AVOIDED_NEAR_M)
   const failed = nav.failed
+  const standingAhead = standing ? placeZones(zones, standing.ids, track).filter(z => z.at >= at).length : 0
 
   return (
     <div className="drive-shell" data-testid="drive-mode" data-arrived={arrived} data-map-theme={theme.name} data-reroute={reroute.kind}>
@@ -502,7 +537,7 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
       </div>
       <div className="drive-vignette" aria-hidden="true" />
 
-      <section className="drive-turn drive-glass" aria-label="다음 안내" aria-live="polite">
+      <section ref={turnRef} className="drive-turn drive-glass" aria-label="다음 안내" aria-live="polite">
         <div className="drive-turn-main">
           <span className="drive-turn-icon"><TurnIcon strokeWidth={2.4} /></span>
           <div className="min-w-0">
@@ -517,7 +552,7 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
         {placedSteps.length === 0 && <p className="drive-turn-then">회전 안내를 받지 못해 경로선만 표시합니다.</p>}
       </section>
 
-      <div className="drive-top-right">
+      <div ref={controlsRef} className="drive-top-right">
         <div className="drive-top-row">
           <span className="drive-chip drive-glass"><WeatherIcon />{driveScene.title} · 강수 {level}단계</span>
           {speechSupported() && (
@@ -553,9 +588,14 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
             {notice.tone === 'safe' ? <ShieldCheck /> : <ShieldAlert />}{notice.text}
           </p>
         )}
+        {standing && standingAhead > 0 && (
+          <p role="status" className={`drive-alert drive-alert-${standing.tone}`} data-testid="drive-standing">
+            <ShieldAlert />{standing.label} · 앞에 피할 구간 {standingAhead}곳
+          </p>
+        )}
         {failed && (
           <p role="alert" className="drive-alert drive-alert-danger">
-            <ShieldAlert />위험 구역을 피하지 못한 경로입니다. 안전한 경로가 아닙니다.
+            <ShieldAlert />피할 구역을 모두 피하지 못한 경로입니다. 안전한 경로가 아닙니다.
           </p>
         )}
         {warning && (
@@ -582,7 +622,7 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
           <div><dt>남은 시간</dt><dd>{formatDuration(timeLeft)}</dd></div>
           <div><dt>남은 거리</dt><dd>{formatDistance(left)}</dd></div>
         </dl>
-        <button type="button" className="drive-exit" onClick={onExit}><X />안내 종료</button>
+        <button type="button" className="drive-exit" onClick={finish}><X />안내 종료</button>
       </section>
 
       <p className="drive-note">
@@ -600,7 +640,7 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
             <span className="drive-arrived-icon"><Flag /></span>
             <h2>목적지에 도착했습니다</h2>
             <p>{destination?.name}</p>
-            <button type="button" className="drive-exit" onClick={onExit}>경로 화면으로 돌아가기</button>
+            <button type="button" className="drive-exit" onClick={finish}>경로 화면으로 돌아가기</button>
           </div>
         </div>
       )}

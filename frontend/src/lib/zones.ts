@@ -18,6 +18,11 @@ export function zoneCenter(geometry: unknown): LonLat {
 }
 
 // Only some types may still be placeholders, so name them instead of calling all zones dummy data.
+// Types with no zones yet (riverside today) are left out of the screen until their data arrives.
+export function zoneTypesWithData(zones: ZoneFeatureCollection | null): Set<ZoneType> {
+  return new Set((zones?.features ?? []).map(feature => feature.properties.type))
+}
+
 export function dummyNotice(zones: ZoneFeatureCollection | null, zoneTypes: AppConfig['zone_types'] | null | undefined): string {
   if (!zones?.metadata.has_dummy) return ''
   const types = new Set<ZoneType>(zones.features.filter(f => f.properties.is_dummy).map(f => f.properties.type))

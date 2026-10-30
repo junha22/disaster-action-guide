@@ -34,14 +34,6 @@ export interface AppConfig {
   default_strategy: string
 }
 
-export interface StrategyInfo {
-  name: string
-  label: string
-  description: string
-  default: boolean
-  params: string[]
-}
-
 export interface Place {
   id: string
   name: string
@@ -68,7 +60,18 @@ export interface WeatherInfo {
   alert_status: 'ok' | 'failed'
   level: number | null
   observed_at: string | null
+  region?: string
+  routable?: boolean
   message: string | null
+}
+
+// A place the weather can be read at: Gwangju and Jeonnam (GET /api/weather/regions).
+export interface WeatherRegion {
+  id: string
+  name: string
+  group: string
+  lon: number
+  lat: number
 }
 
 export interface LineGeometry {
@@ -92,6 +95,7 @@ export interface ZoneRef {
 }
 
 export interface PassedZone extends ZoneRef {
+  group: ZoneGroup
   length_m: number
 }
 
@@ -133,6 +137,7 @@ export interface RouteWeather {
   observed_at: string | null
   real_weather_applied: boolean
   alert_status: string
+  region: string | null
 }
 
 export interface RouteResult {
@@ -157,6 +162,8 @@ export interface RouteExplainBody {
   alert: Alert
   route: ExplainSide
   baseline: ExplainSide
+  hard_groups: ZoneGroup[]
+  soft_groups: ZoneGroup[]
 }
 
 export interface RouteExplainResult {
@@ -181,7 +188,6 @@ export interface RerouteRequestBody {
   remaining: LonLat[]
   remaining_duration_s: number
   previous: RainState
-  strategy: string
   weather_override: RainState | null
 }
 

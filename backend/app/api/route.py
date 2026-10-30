@@ -54,18 +54,19 @@ class RouteBody(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
-def weather_context(override: WeatherOverride | None, service: KmaWeatherService,
-                    params: ResolvedParams) -> WeatherContext:
+def weather_context(override: WeatherOverride | None, service: KmaWeatherService, params: ResolvedParams,
+                    point: tuple[float, float] | None = None) -> WeatherContext:
+    """`point`: where the route starts or the car is, so rain elsewhere does not decide this route."""
     if override is not None:
         return demo_weather(override.rn1_mm, override.alert, params)
-    snapshot = service.get()
+    snapshot = service.get(point)
     if not snapshot.available or snapshot.rn1_mm is None:
         return unavailable_weather()
     alert = snapshot.alert if snapshot.alert_status == "ok" else "none"
     return WeatherContext(source="kma", rn1_mm=snapshot.rn1_mm, alert=alert,
                           level=rain_level(snapshot.rn1_mm, alert, params.thresholds_mm, params.alert_min_level),
                           observed_at=snapshot.observed_at, real_weather_applied=True,
-                          alert_status=snapshot.alert_status)
+                          alert_status=snapshot.alert_status, region=snapshot.region)
 
 
 def timeout_s(config: AppConfig) -> float:
@@ -97,7 +98,7 @@ def find_route(body: RouteBody,
     except ParamsError as exc:
         raise HTTPException(422, str(exc)) from None
     started = time.monotonic()
-    weather = weather_context(body.weather_override, weather_service, params)
+    weather = weather_context(body.weather_override, weather_service, params, origin)
     ctx = StrategyContext(weather=weather, layer=layer, engine=engine, params=params,
                           deadline=started + timeout_s(config))
     try:

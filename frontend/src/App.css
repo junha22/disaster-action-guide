@@ -247,6 +247,33 @@ body {
 }
 
 /* Same gradient as the driving screen's turn card, so the two screens read as one app. */
+.location-select {
+  max-width: 13rem;
+  border: 1px solid rgb(255 255 255 / 0.35);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.14);
+  padding: 0.125rem 0.5rem;
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.location-select:hover {
+  background: rgb(255 255 255 / 0.22);
+}
+
+.location-select:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+}
+
+.location-select option,
+.location-select optgroup {
+  background: #fff;
+  color: #111827;
+}
+
 .btn-route {
   background: linear-gradient(135deg, #0b8478, #1e5fd6);
   box-shadow: 0 6px 16px rgb(20 80 160 / 0.3);

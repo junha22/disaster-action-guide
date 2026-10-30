@@ -21,7 +21,7 @@ function weatherBadge(result: RouteResult) {
   const w = result.weather
   if (w.source === 'demo') return <Badge variant="outline" className="border-amber-300/60 text-amber-200">데모 값 · 실제 기상 아님</Badge>
   if (w.source === 'unavailable') return <Badge variant="outline" className="border-amber-300/60 text-amber-200">실제 강수 미반영</Badge>
-  return <Badge variant="secondary">기상청</Badge>
+  return <Badge variant="secondary">기상청{w.region ? ` · ${w.region} 기준` : ''}</Badge>
 }
 
 interface ZoneRow {
@@ -66,7 +66,7 @@ function ZoneSummary({ zones, config }: { zones: ZoneRow[]; config: AppConfig | 
   )
 }
 
-function PassedLine({ zones, config }: { zones: ZoneRow[]; config: AppConfig | null }) {
+function PassedLine({ label, zones, config }: { label: string; zones: ZoneRow[]; config: AppConfig | null }) {
   const parts = [...new Set(zones.map(z => z.type))].map(type => {
     const count = zones.filter(z => z.type === type).length
     return `${config?.zone_types[type]?.label ?? type} ${count}곳`
@@ -74,7 +74,7 @@ function PassedLine({ zones, config }: { zones: ZoneRow[]; config: AppConfig | n
   const metres = zones.reduce((sum, z) => sum + (z.length_m ?? 0), 0)
   return (
     <div className="pl-[26px] text-xs font-medium text-amber-200">
-      지나는 위험 구역: {parts.join(', ')}{metres > 0 ? ` · ${formatDistance(metres)}` : ''}
+      {label}: {parts.join(', ')}{metres > 0 ? ` · ${formatDistance(metres)}` : ''}
     </div>
   )
 }
@@ -100,6 +100,13 @@ export default function RouteResultCard({ config, result, showBaseline, onShowBa
   // Partial avoidance still passes some soft zones: never shown with the "safe" check mark.
   const partial = e.status === 'partially_avoided'
   const avoided = e.avoided_zones.length > 0 && !partial && e.passed_zones.length === 0
+  // baseline and rerank have no list of zones to avoid, so their zones cannot be sorted into the two lines.
+  const hasRules = e.status !== 'baseline' && e.status !== 'ranked'
+  const toAvoid = hasRules ? e.passed_zones.filter(z => e.avoid_groups.includes(z.group)) : e.passed_zones
+  const others = hasRules ? e.passed_zones.filter(z => !e.avoid_groups.includes(z.group)) : []
+  const scoreRose = result.metrics.route.exposure_score > result.metrics.baseline.exposure_score
+  const mustAvoid = (zones: { group: string }[]) => zones.filter(z => e.hard_groups.includes(z.group)).length
+  const fewer = mustAvoid(e.baseline_passed_zones) - mustAvoid(e.passed_zones)
 
   return (
     <div className="space-y-2.5" data-testid="route-result" data-status={e.status} data-level={e.level} aria-live="polite">
@@ -118,7 +125,13 @@ export default function RouteResultCard({ config, result, showBaseline, onShowBa
       {failed && (
         <div role="alert" className="space-y-0.5 rounded-lg border border-red-400/50 bg-red-500/15 px-2.5 py-2 text-xs leading-5">
           {e.failure_reason && <p className="font-semibold">이유: {e.failure_reason}</p>}
-          <p>회피하지 못한 기본 경로입니다. 안전한 경로가 아닙니다.</p>
+          {fewer > 0 && (
+            <p>
+              피할 구역을 가장 적게 지나는 경로입니다. 가장 빠른 길보다 {fewer}곳 적게 지나고,
+              {Math.round(e.added_duration_s) === 0 ? ' 소요시간은 같습니다.' : ` ${formatDuration(e.added_duration_s)} ${e.added_duration_s > 0 ? '더' : '덜'} 걸립니다.`}
+            </p>
+          )}
+          <p>피할 구역을 모두 피하지 못했습니다. 안전한 경로가 아닙니다.</p>
         </div>
       )}
       {partial && (
@@ -131,7 +144,8 @@ export default function RouteResultCard({ config, result, showBaseline, onShowBa
       )}
 
       {/* Safety information, so it stays outside the fold whatever else is collapsed. */}
-      {e.passed_zones.length > 0 && <PassedLine zones={e.passed_zones} config={config} />}
+      {toAvoid.length > 0 && <PassedLine label={hasRules ? '지나는 피할 구역' : '지나는 위험 구역'} zones={toAvoid} config={config} />}
+      {others.length > 0 && <PassedLine label="이번 단계에서 피하지 않는 위험 구역" zones={others} config={config} />}
 
       <dl className="grid grid-cols-2 gap-2">
         <div className="stat-tile">
@@ -157,7 +171,6 @@ export default function RouteResultCard({ config, result, showBaseline, onShowBa
         </summary>
         <div className="mt-2.5 space-y-3">
           <div className="flex flex-wrap items-center gap-1.5">
-            <Badge variant="secondary">{result.strategy.label}</Badge>
             <Badge variant="outline">강수 {result.weather.level}단계</Badge>
             {weatherBadge(result)}
           </div>
@@ -190,6 +203,11 @@ export default function RouteResultCard({ config, result, showBaseline, onShowBa
               {Math.round(result.metrics.baseline.exposure_score)} → <strong>{Math.round(result.metrics.route.exposure_score)}</strong>
             </dd>
           </dl>
+          {scoreRose && (
+            <p className="text-xs text-muted-foreground">
+              위험 노출 점수는 구간 길이로 계산해 회피 등급을 반영하지 않습니다. 경로는 등급까지 따져 골랐습니다.
+            </p>
+          )}
 
           {result.metrics.alternatives.length > 0 && (
             <div>

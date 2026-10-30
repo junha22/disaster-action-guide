@@ -30,6 +30,7 @@ from botocore.exceptions import BotoCoreError, ClientError, ConnectTimeoutError,
 
 from .ai_quota import QuotaExceeded, reserve_ai_request
 from .ai_service import DEFAULT_MODEL, AllowedModel, ai_mode
+from .config import ZONE_GROUPS
 from .risk.layer import RiskZone
 from .strategies.base import MESSAGES
 
@@ -46,6 +47,7 @@ DEFAULT_TIMEOUT_S = 8.0
 FIXED_STATUSES = {"baseline", "no_avoid_level", "nothing_on_route"}
 ALERT_MODES = {"warning": "호우경보", "advisory": "호우주의보"}
 AVOID_FAILED_RESULT = "피해야 할 위험 구간을 모두 피하는 경로를 찾지 못해 일반 경로를 그대로 보여줌"
+FEWEST_RESULT = "피해야 할 위험 구간을 모두 피하는 경로를 찾지 못해 가장 적게 지나는 경로를 보여줌"
 # B안 (design.md 5.7): hard zones are all avoided, some soft zones remain on the route.
 PARTIAL_RESULT = "반드시 피할 위험 구간은 모두 피했고, 되도록 피할 위험 구간 일부는 지남"
 
@@ -59,7 +61,8 @@ SYSTEM_PROMPT = """너는 호우 위험 회피 경로 서비스에서 경로 선
 4. 다른 경로를 추천하지 않는다. 운전, 출발, 이동을 권하거나 말리지 않는다.
 5. 대체_계산이 true이면 기본 후보가 모두 위험 구역을 지나 다른 경로 엔진으로 따로 계산했다는 사실을 한 번 말한다.
 6. 좌표, 링크, 목록 기호, 제목 없이 문장만 쓴다.
-7. 회피_등급은 강수 단계마다 어느 침수 이력 구역부터 피할지 정한 분류다. 등급을 이유로 지나도 된다거나 덜 위험하다고 쓰지 않는다."""
+7. 회피_등급은 강수 단계마다 어느 침수 이력 구역부터 피할지 정한 분류다. 등급을 이유로 지나도 된다거나 덜 위험하다고 쓰지 않는다.
+8. 반드시_피할_구간_수와 되도록_피할_구간_수가 있으면 그 수의 차이로 이유를 설명한다. 수가 같고 회피_우선순위가_낮아짐이 true이면 "회피 우선순위가 더 낮은 구간으로 지나요"라고 쓴다."""
 
 QUERY = "추천 경로를 고른 이유를 2~3문장으로 설명해 주세요."
 
@@ -120,6 +123,8 @@ class ExplainInput:
     route_zones: tuple[ZoneLength, ...]
     baseline_zones: tuple[ZoneLength, ...]
     fallback_engine: bool = False  # 대체_계산: no alternative engine exists yet, so always false today
+    hard_groups: tuple[str, ...] = ()
+    soft_groups: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -187,6 +192,23 @@ def _zone_facts(items: Iterable[ZoneLength], zones: dict[str, RiskZone], labels:
     return {"위험_구간_수": len(resolved), "위험_구간": listed}
 
 
+def _avoid_counts(items: Iterable[ZoneLength], hard: Iterable[str], soft: Iterable[str],
+                  zones: dict[str, RiskZone]) -> dict[str, int]:
+    items = list(items)
+    hard, soft = set(hard), set(soft)
+    hard_n = sum(zones[z.id].group in hard for z in items)
+    soft_n = sum(zones[z.id].group in soft for z in items)
+    return {"반드시_피할_구간_수": hard_n, "되도록_피할_구간_수": soft_n, "그_밖의_구간_수": len(items) - hard_n - soft_n}
+
+
+def _lower_priority(route: Iterable[ZoneLength], baseline: Iterable[ZoneLength], zones: dict[str, RiskZone]) -> bool:
+    """The route swaps zones for ones further down the avoidance order (ZONE_GROUPS runs first to last)."""
+    def order(items):
+        groups = [zones[z.id].group for z in items]
+        return [groups.count(g) for g in ZONE_GROUPS]
+    return order(route) < order(baseline)
+
+
 def _same_route(data: ExplainInput) -> bool:
     return (round(data.route_duration_s, 1) == round(data.baseline_duration_s, 1)
             and {z.id for z in data.route_zones} == {z.id for z in data.baseline_zones})
@@ -210,7 +232,7 @@ def build_facts(data: ExplainInput, zones: dict[str, RiskZone], labels: dict[str
     def zone_facts(items):
         return _zone_facts(items, zones, labels, tier_labels)
 
-    if data.status == "avoid_failed":
+    if data.status == "avoid_failed" and _same_route(data):
         facts["결과"] = AVOID_FAILED_RESULT
         facts["추천"] = {"경로": "일반 경로", "소요시간_분": base_min, **zone_facts(data.baseline_zones)}
     elif not needs_ai(data):
@@ -219,25 +241,54 @@ def build_facts(data: ExplainInput, zones: dict[str, RiskZone], labels: dict[str
     else:
         if data.status == "partially_avoided":
             facts["결과"] = PARTIAL_RESULT
+        elif data.status == "avoid_failed":
+            facts["결과"] = FEWEST_RESULT
         facts["추천"] = {"경로": "회피 경로" if data.status == "avoided" else "추천 경로",
                        "소요시간_분": route_min, **zone_facts(data.route_zones)}
         facts["비교"] = {"경로": "일반 경로", "소요시간_분": base_min, **zone_facts(data.baseline_zones)}
-        facts["추가_소요시간_분"] = route_min - base_min
+        # From the seconds, not the rounded minutes: the screen shows the same difference.
+        facts["추가_소요시간_분"] = round((data.route_duration_s - data.baseline_duration_s) / 60)
+        if data.hard_groups or data.soft_groups:
+            counts = (data.hard_groups, data.soft_groups, zones)
+            facts["추천"].update(_avoid_counts(data.route_zones, *counts))
+            facts["비교"].update(_avoid_counts(data.baseline_zones, *counts))
+            facts["회피_우선순위가_낮아짐"] = _lower_priority(data.route_zones, data.baseline_zones, zones)
     facts["대체_계산"] = bool(data.fallback_engine)
     return facts
 
 
 # ---- template ----------------------------------------------------------------------------------
 
+OUT_OF_SCOPE_RESULTS = {MESSAGES["no_avoid_level"], MESSAGES["nothing_on_route"]}
+
+
+def _compared_sentences(facts: dict[str, Any]) -> str:
+    chosen, baseline, extra = facts["추천"], facts["비교"], facts["추가_소요시간_분"]
+    phrase = _avoid_phrase(baseline)
+    first = f"일반 경로는 {phrase}을 지나요." if phrase else "일반 경로는 이번 단계에서 피할 구간을 지나지 않아요."
+    same = all(chosen[k] == baseline[k] for k in ("반드시_피할_구간_수", "되도록_피할_구간_수"))
+    if same and phrase and facts["회피_우선순위가_낮아짐"]:
+        time_part = _time_part(extra, "고")
+        return f"{first} 추천 경로는 {time_part} 수는 같지만 회피 우선순위가 더 낮은 구간으로 지나요."
+    return f"{first} {_candidate_sentence('추천 경로', baseline, chosen, extra)}"
+
+
+
 def template_text(facts: dict[str, Any]) -> str:
     lead = "기본 후보 경로가 모두 위험 구역을 지나 다른 경로 엔진으로 따로 계산했어요. " if facts["대체_계산"] else ""
     chosen = facts["추천"]
     if "비교" not in facts:
         count = chosen["위험_구간_수"]
-        tail = f" 이 경로는 위험 구간 {count}곳을 지나요." if count else " 이 경로는 알려진 위험 구간을 지나지 않아요."
+        # These statuses mean nothing this level avoids is on the route, so what is left is outside its rules.
+        kind = "이번 단계에서 피하지 않는 위험 구간" if facts.get("결과") in OUT_OF_SCOPE_RESULTS else "위험 구간"
+        tail = f" 이 경로는 {kind} {count}곳을 지나요." if count else " 이 경로는 알려진 위험 구간을 지나지 않아요."
         if facts.get("결과") == AVOID_FAILED_RESULT:
             return lead + "위험 구간을 모두 피하는 경로를 찾지 못해 일반 경로를 보여드려요." + tail
         return lead + facts["결과"] + tail
+    if facts.get("결과") == FEWEST_RESULT:
+        lead += "위험 구간을 모두 피하는 경로를 찾지 못해 가장 적게 지나는 경로를 보여드려요. "
+    if "반드시_피할_구간_수" in chosen:
+        return lead + _compared_sentences(facts)
     base_n, route_n, extra = facts["비교"]["위험_구간_수"], chosen["위험_구간_수"], facts["추가_소요시간_분"]
     first = f"일반 경로는 위험 구간 {base_n}곳을 지나요." if base_n else "일반 경로는 알려진 위험 구간을 지나지 않아요."
     if route_n == 0:
@@ -307,18 +358,27 @@ def _avoid_phrase(side: dict[str, Any]) -> str:
     return "과 ".join(parts)
 
 
-def _candidate_sentence(current: dict[str, Any], candidate: dict[str, Any], extra: int) -> str:
+def _time_part(extra: int, ending: str) -> str:
+    """ending "고": "3분 더 걸리고". "지만": "3분 더 걸리지만". A shorter time is never a trade-off."""
+    if extra < 0:
+        return f"{-extra}분 덜 걸리고"
+    if extra > 0:
+        return f"{extra}분 더 걸리{ending}"
+    return "소요시간이 비슷하고" if ending == "고" else "소요시간은 비슷하지만"
+
+
+def _candidate_sentence(subject: str, current: dict[str, Any], candidate: dict[str, Any], extra: int) -> str:
     phrase = _avoid_phrase(candidate)
     if phrase:
-        time_part = f"{extra}분 더 걸리고" if extra > 0 else "소요시간이 비슷하고" if extra == 0 else f"{-extra}분 덜 걸리고"
+        time_part = _time_part(extra, "고")
         if current["반드시_피할_구간_수"] and not candidate["반드시_피할_구간_수"]:
-            return f"변경 경로는 {time_part} 반드시 피할 구간은 지나지 않지만 {phrase}은 지나요."
-        return f"변경 경로는 {time_part} {phrase}을 지나요."
-    time_part = f"{extra}분 더 걸리지만" if extra > 0 else "소요시간은 비슷하지만" if extra == 0 else f"{-extra}분 덜 걸리고"
+            return f"{subject}는 {time_part} 반드시 피할 구간은 지나지 않지만 {phrase}은 지나요."
+        return f"{subject}는 {time_part} {phrase}을 지나요."
+    time_part = _time_part(extra, "지만")
     if candidate["그_밖의_구간_수"]:
-        return (f"변경 경로는 {time_part} 이번 단계에 피할 구간을 지나지 않아요. "
+        return (f"{subject}는 {time_part} 이번 단계에 피할 구간을 지나지 않아요. "
                 f"그 밖의 위험 구간 {candidate['그_밖의_구간_수']}곳은 지나요.")
-    return f"변경 경로는 {time_part} 알려진 위험 구간을 지나지 않아요."
+    return f"{subject}는 {time_part} 알려진 위험 구간을 지나지 않아요."
 
 
 def reroute_template(facts: dict[str, Any]) -> str:
@@ -329,7 +389,7 @@ def reroute_template(facts: dict[str, Any]) -> str:
     second = f"지금 경로는 남은 길에서 {_avoid_phrase(current)}을 지나요."
     if facts["판단"] == "no_better":
         return f"{first}. {second} 더 나은 경로를 찾지 못해 지금 경로로 안내해요."
-    return f"{first}. {second} {_candidate_sentence(current, candidate, facts['추가_소요시간_분'])}"
+    return f"{first}. {second} {_candidate_sentence('변경 경로', current, candidate, facts['추가_소요시간_분'])}"
 
 
 # ---- output check ------------------------------------------------------------------------------

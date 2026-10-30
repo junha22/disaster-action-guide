@@ -41,8 +41,7 @@ def setup():
 def body(rn1=75, remaining=None, **overrides):
     base = {"position": {"lon": ORIGIN[0], "lat": ORIGIN[1]}, "destination": {"lon": DESTINATION[0], "lat": DESTINATION[1]},
             "heading": 90, "remaining": remaining or STRAIGHT, "remaining_duration_s": 600,
-            "previous": {"rn1_mm": 0, "alert": "none"}, "strategy": "tiered_rain",
-            "weather_override": {"rn1_mm": rn1, "alert": "none"}}
+            "previous": {"rn1_mm": 0, "alert": "none"}, "weather_override": {"rn1_mm": rn1, "alert": "none"}}
     return {**base, **overrides}
 
 
@@ -58,6 +57,14 @@ def test_worse_rain_asks_to_change_a_route_that_passes_avoided_zones(setup):
                             "지금 경로는 남은 길에서 반드시 피할 구간 3곳을 지나요. "
                             "변경 경로는 5분 더 걸리지만 알려진 위험 구간을 지나지 않아요.")
     assert all(call["heading"] == 90 for call in state["engine"].calls)  # the car's direction reaches the engine
+
+
+def test_the_rules_of_the_level_apply_whatever_algorithm_drew_the_route(setup):
+    # A route from baseline or rerank is judged the same way: the API takes no algorithm at all.
+    client, _ = setup
+    data = client.post("/api/route/reroute", json=body()).json()
+    assert "underpass" in data["hard_groups"] and data["action"] == "recommend"
+    assert client.post("/api/route/reroute", json=body(strategy="baseline")).status_code == 422
 
 
 def test_only_zones_of_the_new_level_count(setup):

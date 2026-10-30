@@ -1,8 +1,8 @@
 // All calls use relative /api/ paths. Coordinates and search terms go in POST bodies only.
 import type {
   AppConfig, GuidanceStep, LonLat, Place, RerouteExplainBody, RerouteExplainResult, RerouteRequestBody, RerouteResult,
-  RouteExplainBody, RouteExplainResult, RouteRequestBody, RouteResult, SearchResult, StrategyInfo, WeatherInfo,
-  ZoneFeatureCollection,
+  RouteExplainBody, RouteExplainResult, RouteRequestBody, RouteResult, SearchResult, WeatherInfo,
+  WeatherRegion, ZoneFeatureCollection,
 } from './types'
 
 export class ApiError extends Error {
@@ -40,10 +40,11 @@ function post<T>(url: string, data: unknown, signal?: AbortSignal): Promise<T> {
 
 export const api = {
   appConfig: () => request<AppConfig>('/api/app-config'),
-  strategies: () => request<StrategyInfo[]>('/api/strategies'),
   riskZones: () => request<ZoneFeatureCollection>('/api/risk-zones'),
   demoPoints: () => request<Place[]>('/api/demo-points'),
-  weather: () => request<WeatherInfo>('/api/weather'),
+  weather: (signal?: AbortSignal) => request<WeatherInfo>('/api/weather', { signal }),
+  weatherAt: (point: { lon: number; lat: number }, signal?: AbortSignal) => post<WeatherInfo>('/api/weather', point, signal),
+  weatherRegions: () => request<WeatherRegion[]>('/api/weather/regions'),
   search: (query: string) => post<SearchResult>('/api/search', { query }),
   route: (body: RouteRequestBody, signal?: AbortSignal) => post<RouteResult>('/api/route', body, signal),
   guidance: (coordinates: LonLat[]) => post<{ steps: GuidanceStep[] }>('/api/route/guidance', { coordinates }),

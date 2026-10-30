@@ -30,7 +30,7 @@ class ZonePass:
     length_m: float
 
     def as_dict(self) -> dict:
-        return {**self.zone.ref(), "length_m": round(self.length_m, 1)}
+        return {**self.zone.ref(), "group": self.zone.group, "length_m": round(self.length_m, 1)}
 
 
 @dataclass(frozen=True)

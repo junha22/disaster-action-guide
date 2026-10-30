@@ -25,8 +25,9 @@ class StubWeather:
     def __init__(self, snapshot):
         self.snapshot, self.calls = snapshot, 0
 
-    def get(self):
+    def get(self, point=None):
         self.calls += 1
+        self.point = point
         return self.snapshot
 
 
@@ -115,14 +116,14 @@ def test_engine_unavailable_is_503_and_missing_baseline_is_422(setup):
     assert response.status_code == 422 and "경로를 찾지 못했습니다" in response.json()["detail"]
 
 
-def test_avoid_failure_returns_baseline_with_warning(setup):
+def test_avoid_failure_warns_and_lists_the_zones(setup):
     client, _ = setup
     data = client.post("/api/route", json=body(destination={"lon": 126.82, "lat": 35.15},
                                                weather_override={"rn1_mm": 35})).json()
     e = data["explanation"]
     assert e["status"] == "avoid_failed" and e["warning"] == "위험 구역을 피하는 경로를 찾지 못했습니다."
-    assert "목적지가" in e["failure_reason"] and data["route"] == data["baseline"]
-    assert any(z["type"] == "underpass" for z in e["passed_zones"])
+    assert "목적지가" in e["failure_reason"]
+    assert e["passed_zones"] and len(e["passed_zones"]) <= len(e["baseline_passed_zones"])
 
 
 def test_registered_strategy_is_usable_without_api_changes(setup):
