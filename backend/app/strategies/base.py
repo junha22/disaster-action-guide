@@ -1,11 +1,11 @@
 """Strategy interface, route plan and the shared candidate search / selection (requirement 4)."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import time
 from typing import Any, ClassVar, Iterable, Protocol, Sequence
 
 from pydantic import BaseModel
 
-from ..config import ZONE_TYPES, expand_groups, groups_of, types_of
+from ..config import ZONE_GROUPS, ZONE_TYPES, expand_groups, groups_of, types_of
 from ..engines.base import (ExcludeLimitExceeded, LocationNotRoutable, LonLat, NoRouteFound,
                             OsrmRoute, RoutingEngine)
 from ..risk.layer import AvoidPolygon, RiskLayer
@@ -254,7 +254,7 @@ def collect_candidates(ctx: StrategyContext, request: RouteRequest, types: Seque
         if not chosen:
             stop = None
             break
-        if round_no > 1 and ctx.remaining() < MIN_ROUND_TIME_S:
+        if ctx.remaining() < MIN_ROUND_TIME_S:
             stop = "time"
             break
         selected = [by_id[i] for i in chosen]
@@ -296,6 +296,52 @@ def collect_candidates(ctx: StrategyContext, request: RouteRequest, types: Seque
     return SearchResult(routes=found, stop_reason=stop)
 
 
+@dataclass(frozen=True)
+class CandidatePool:
+    """Routes every strategy and rain level chooses from (design.md 5.7)."""
+    routes: list[ScoredRoute]                 # discovery order, no duplicate geometry
+    baseline: ScoredRoute                     # fastest of `routes`
+    polygons: list[AvoidPolygon]              # every active zone with its avoidance buffer
+    stops: dict[tuple[str, ...], str | None]  # why the search for each group set ended
+
+
+def exclusion_sets(ctx: StrategyContext) -> list[tuple[str, ...]]:
+    """What each rain level avoids, narrowest first, then every group."""
+    levels = ctx.params.avoid_by_level
+    return list(dict.fromkeys(g for g in (*(levels[k] for k in sorted(levels)), ZONE_GROUPS) if g))
+
+
+def common_candidates(ctx: StrategyContext, request: RouteRequest) -> CandidatePool:
+    """Search for every level at once, whatever the current level is.
+
+    Choosing from one set of routes is what keeps the ETA from falling as the level rises, and it
+    makes the baseline the fastest route found rather than the engine's lowest-cost one.
+    "Fastest" means fastest of these candidates, not the fastest route that exists.
+    """
+    seed = baseline_routes(ctx, request, alternates=2)
+    first = seed[0]
+    polygons = ctx.layer.avoid_polygons(ZONE_GROUPS, ctx.params.avoid_buffer_m)
+    # Zones covering the origin/destination cannot be excluded (no route at all); the caller
+    # fails on them when they are hard and charges them when they are soft.
+    blocked = {z.id for point in (request.origin, request.destination)
+               for z in ctx.layer.containing(point, polygons)}
+    routes = seed
+    stops: dict[tuple[str, ...], str | None] = {}
+    searched: dict[frozenset[str], str | None] = {}
+    for groups in exclusion_sets(ctx):
+        usable = [p for p in polygons if p.zone.group in groups and p.zone.id not in blocked]
+        key = frozenset(p.zone.id for p in usable)
+        if key not in searched:  # sets that differ only by groups without zones search the same
+            result = collect_candidates(ctx, request, groups, usable, first.exposure.zone_ids(groups), seed=routes)
+            routes, searched[key] = result.routes, result.stop_reason
+        stops[groups] = searched[key]
+    fastest = min(range(len(routes)), key=lambda i: routes[i].osrm["duration"])  # ties: found first
+    if fastest:
+        routes[0] = replace(routes[0], label="엔진 첫 경로")
+        routes[fastest] = replace(routes[fastest], label="기본 경로")
+    return CandidatePool(routes=routes, baseline=routes[fastest], polygons=polygons, stops=stops)
+
+
 def soft_penalty(ctx: StrategyContext, route: ScoredRoute, soft: Sequence[str]) -> float:
     """Detour seconds charged for passing 'soft' groups:
     (entry penalty + per-metre penalty of the type) x penalty scale of the group (design.md 5.8)."""
@@ -323,13 +369,13 @@ def avoid_plan(ctx: StrategyContext, request: RouteRequest, hard: Iterable[str],
 
     `hard` and `soft` are avoidance groups or type names (all tiers of the type, design.md 5.8).
     Falls back to the baseline with a warning when no candidate avoids every hard zone
-    (requirement 4.9). Candidates come from collect_candidates (design.md 5.7).
+    (requirement 4.9). Candidates come from common_candidates (design.md 5.7).
     """
     hard = expand_groups(hard)
     soft = tuple(g for g in expand_groups(soft) if g not in hard)
     groups = expand_groups((*hard, *soft))
-    base_routes = baseline_routes(ctx, request, alternates=2)
-    baseline = base_routes[0]
+    pool = common_candidates(ctx, request)
+    baseline = pool.baseline
     common = {"avoid_groups": groups, "hard_groups": hard, "soft_groups": soft}
     if not groups:
         return make_plan(ctx, route=baseline, baseline=baseline, status=empty_status)
@@ -340,23 +386,14 @@ def avoid_plan(ctx: StrategyContext, request: RouteRequest, hard: Iterable[str],
         return make_plan(ctx, route=baseline, baseline=baseline, status="avoid_failed", message=AVOID_FAILED,
                          warning=AVOID_FAILED, failure_reason=reason, **common)
 
-    buffers = ctx.params.avoid_buffer_m
-    hard_polygons = ctx.layer.avoid_polygons(hard, buffers) if hard else []
+    hard_polygons = [p for p in pool.polygons if p.zone.group in hard]
     for role, point in (("출발지", request.origin), ("목적지", request.destination)):
         inside = ctx.layer.containing(point, hard_polygons)
         if inside:
             return failed(f"{role}가 '{inside[0].name}' 구역 안에 있습니다.")
-    soft_polygons = ctx.layer.avoid_polygons(soft, buffers) if soft else []
-    # Soft zones covering the origin/destination cannot be excluded (no route at all); they stay
-    # in the cost only.
-    blocked = {z.id for point in (request.origin, request.destination)
-               for z in ctx.layer.containing(point, soft_polygons)}
-    polygons = hard_polygons + [p for p in soft_polygons if p.zone.id not in blocked]
-    search = collect_candidates(ctx, request, groups, polygons, baseline.exposure.zone_ids(groups),
-                                seed=base_routes)
-    valid = [r for r in search.routes if not r.exposure.zone_ids(hard)]
+    valid = [r for r in pool.routes if not r.exposure.zone_ids(hard)]
     if not valid:
-        reason = STOP_REASONS.get(search.stop_reason or "", REASON_LEFTOVER)
+        reason = STOP_REASONS.get(pool.stops.get(groups) or "", REASON_LEFTOVER)
         if reason == REASON_LEFTOVER and ctx.remaining() < MIN_ROUND_TIME_S:
             reason = REASON_TIME
         return failed(reason)

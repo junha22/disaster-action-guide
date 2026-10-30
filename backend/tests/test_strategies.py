@@ -88,14 +88,15 @@ def test_tiered_rain_boundaries(rn1, level, groups, avoided, route_label):
     assert list(e.avoid_types) == sorted({g.split(".")[0] for g in groups}, key=["underpass", "flood_history",
                                                                                   "riverside"].index)
     assert label_of(plan) == route_label
+    # Every level asks the same questions: the plain request, then one search per group set.
+    # Every round asks for alternates (they are candidates).
+    assert [len(c["exclude_polygons"]) for c in fake.calls] == [0, 1, 2, 3]
+    assert [c["alternates"] for c in fake.calls] == [2, 2, 2, 2]
     if level == 0:
         assert e.status == "no_avoid_level" and e.message.startswith("현재 강수 단계에서는 피하는 구역이 없습니다")
-        assert len(fake.calls) == 1 and plan.route is plan.baseline
+        assert plan.route is plan.baseline
     else:
-        # baseline, then one exclusion round; every round asks for alternates (they are candidates)
-        assert e.status == "avoided" and len(fake.calls) == 2
-        assert len(fake.calls[1]["exclude_polygons"]) == len(avoided)
-        assert fake.calls[1]["alternates"] == 2
+        assert e.status == "avoided"
         assert {z["type"] for z in e.avoided_zones} == set(avoided)
         assert e.added_duration_s > 0
         assert plan.metrics()["route"]["exposure_score"] < plan.metrics()["baseline"]["exposure_score"]
@@ -144,7 +145,7 @@ def assert_failed(plan, reason_part):
 def test_destination_inside_zone_returns_baseline_with_warning():
     plan, fake = run("tiered_rain", rn1=35, request=RouteRequest(ORIGIN, (126.82, LAT)))
     assert_failed(plan, "목적지가 'z-underpass' 구역 안에 있습니다")
-    assert len(fake.calls) == 1
+    assert max(len(c["exclude_polygons"]) for c in fake.calls) == 2  # flood + riverside, never the blocked zone
 
 
 def test_no_route_after_exclusion_returns_baseline_with_warning():
@@ -179,30 +180,28 @@ def test_only_zones_on_the_route_are_excluded_and_new_ones_are_added():
     second = make_zone("second", "flood_history", square(126.86, LAT + 0.005, 100))
     plan, fake = run("tiered_rain", rn1=55, layer=corridor_layer([far, second]))
     assert plan.explanation.status == "avoided"
-    assert len(fake.calls) == 3
-    assert len(fake.calls[1]["exclude_polygons"]) == 2  # z-underpass, z-flood_history
-    assert len(fake.calls[2]["exclude_polygons"]) == 3  # + second
-    assert [c["alternates"] for c in fake.calls[1:]] == [2, 2]  # enough budget: alternates every round
+    # plain request; level 1 search (z-underpass); level 2 search (+ z-flood_history, then + second);
+    # level 3 search (z-underpass, z-flood_history, z-riverside)
+    assert [len(c["exclude_polygons"]) for c in fake.calls] == [0, 1, 2, 3, 3]
+    assert [c["alternates"] for c in fake.calls[1:]] == [2, 2, 2, 2]  # enough budget: alternates every round
     assert label_of(plan) == "avoid-all"
 
 
 def _slow_plan(rn1, extra_zones):
     def slow(call):
-        time.sleep(0.15)
+        time.sleep(0.3)
 
     fake = engine(error=slow)
     resolved = resolve(get_config(), registry.get_strategy("tiered_rain").params_model, {})
     ctx = StrategyContext(weather=demo_weather(rn1, "none", resolved), layer=corridor_layer(extra_zones),
-                          engine=fake, params=resolved, deadline=time.monotonic() + 1.2)
+                          engine=fake, params=resolved, deadline=time.monotonic() + 1.5)
     return registry.get_strategy("tiered_rain").plan(REQUEST, ctx), fake
 
 
 def test_running_out_of_time_is_reported_as_a_timeout():
-    # 75 mm: every type is hard. 'second' and 'third' put zones on the detours, so round 1 still
-    # passes one and the budget is gone before round 2.
-    second = make_zone("second", "flood_history", square(126.86, LAT + 0.005, 100))
-    third = make_zone("third", "flood_history", square(126.89, LAT + 0.005, 100))
-    plan, fake = _slow_plan(75, [second, third])
+    # 75 mm: every type is hard. The budget is gone after the level 1 search, before anything
+    # avoids the riverside zone. Later searches stop instead of failing with an engine timeout.
+    plan, fake = _slow_plan(75, [])
     e = plan.explanation
     assert e.status == "avoid_failed"
     assert "제한 시간" in e.failure_reason
@@ -408,3 +407,47 @@ def test_penalty_scale_multiplies_the_type_penalty():
     expected = (120 + 1 * passed.length_m) * 0.5
     assert soft_penalty(ctx, plan.route, ["flood_history.raised"]) == pytest.approx(expected)
     assert soft_penalty(ctx, plan.route, ["flood_history.normal"]) == 0  # other tiers are not charged
+
+
+# ---- common candidates: every strategy and level chooses from the same routes (design.md 5.7) --
+
+# The engine's first route is not the fastest, and the fastest only shows up in an exclusion round.
+FAST_DETOUR = [
+    {"label": "straight", "coords": CANDIDATES[0]["coords"], "duration": 900.0},
+    {"label": "avoid-u", "coords": CANDIDATES[1]["coords"], "duration": 950.0},
+    {"label": "avoid-uf", "coords": CANDIDATES[2]["coords"], "duration": 1000.0},
+    {"label": "avoid-all", "coords": CANDIDATES[3]["coords"], "duration": 800.0},
+]
+
+
+def test_level_0_takes_the_fastest_candidate_not_the_engines_first_route():
+    plan, _ = run("tiered_rain", rn1=0, fake=engine(FAST_DETOUR))
+    assert label_of(plan) == "avoid-all" and plan.route is plan.baseline
+    assert plan.explanation.status == "no_avoid_level" and plan.baseline.label == "기본 경로"
+
+
+def test_the_fastest_route_is_the_baseline_of_every_strategy():
+    baseline_plan, _ = run("baseline", fake=engine(FAST_DETOUR))
+    assert baseline_plan.route is baseline_plan.baseline
+    durations = [baseline_plan.route.osrm["duration"], *(a.osrm["duration"] for a in baseline_plan.alternatives)]
+    assert durations == [800.0, 900.0, 950.0, 1000.0]
+    for name in NAMES:
+        plan, _ = run(name, rn1=55, fake=engine(FAST_DETOUR))
+        assert plan.baseline.osrm["duration"] == 800.0 and plan.explanation.added_duration_s >= 0
+
+
+@pytest.mark.parametrize("rows", [CANDIDATES, SLOW_CLEAR, TIER_DETOUR, FAST_DETOUR])
+@pytest.mark.parametrize("tier", ["high", "normal", "raised"])
+def test_eta_never_falls_as_the_level_rises(rows, tier):
+    plans = [run("tiered_rain", rn1=rn1, fake=engine(rows), layer=corridor_layer(flood_tier=tier))[0]
+             for rn1 in (0, 35, 55, 75)]
+    durations = [p.route.osrm["duration"] for p in plans]
+    assert durations == sorted(durations)
+    assert all(p.explanation.added_duration_s >= 0 for p in plans)
+
+
+def test_group_sets_with_the_same_zones_are_searched_once():
+    only_underpass = corridor_layer_without_route(make_zone("u", "underpass", square(126.82, LAT, 100)))
+    plan, fake = run("hard_exclude", layer=only_underpass)
+    assert plan.explanation.status == "avoided"
+    assert [len(c["exclude_polygons"]) for c in fake.calls] == [0, 1]

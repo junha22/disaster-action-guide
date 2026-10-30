@@ -1,4 +1,4 @@
-from .base import RoutePlan, RouteRequest, StrategyContext, baseline_routes, make_plan
+from .base import MAX_ALTERNATIVES, RoutePlan, RouteRequest, StrategyContext, common_candidates, make_plan
 from .params import CommonParams
 from .registry import register
 
@@ -10,5 +10,7 @@ class BaselineStrategy:
     params_model = CommonParams
 
     def plan(self, request: RouteRequest, ctx: StrategyContext) -> RoutePlan:
-        routes = baseline_routes(ctx, request, alternates=2)
-        return make_plan(ctx, route=routes[0], baseline=routes[0], alternatives=routes[1:], status="baseline")
+        pool = common_candidates(ctx, request)
+        ranked = sorted(pool.routes, key=lambda r: r.osrm["duration"])  # stable: ranked[0] is pool.baseline
+        return make_plan(ctx, route=ranked[0], baseline=pool.baseline, status="baseline",
+                         alternatives=ranked[1:1 + MAX_ALTERNATIVES])
