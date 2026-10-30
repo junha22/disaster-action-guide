@@ -11,6 +11,10 @@ export function avoidTypesFor(level: number, rules: LevelRules): ZoneType[] {
   return rules.avoid_by_level[String(level)] ?? []
 }
 
+export function softTypesFor(level: number, rules: LevelRules): ZoneType[] {
+  return rules.soft_by_level?.[String(level)] ?? []
+}
+
 export const ALERT_LABELS: Record<Alert, string> = {
   none: '없음',
   advisory: '호우주의보',

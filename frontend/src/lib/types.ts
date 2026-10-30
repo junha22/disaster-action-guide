@@ -10,7 +10,9 @@ export interface ZoneTypeInfo {
 
 export interface LevelRules {
   thresholds_mm: number[]
-  avoid_by_level: Record<string, ZoneType[]>
+  avoid_by_level: Record<string, ZoneType[]>  // hard + soft
+  hard_by_level: Record<string, ZoneType[]>   // 반드시 피함
+  soft_by_level: Record<string, ZoneType[]>   // 되도록 피함
   alert_min_level: { advisory: number; warning: number }
 }
 
@@ -84,12 +86,16 @@ export interface PassedZone extends ZoneRef {
 }
 
 export type PlanStatus =
-  | 'baseline' | 'no_avoid_level' | 'nothing_on_route' | 'avoided' | 'avoid_failed' | 'ranked'
+  | 'baseline' | 'no_avoid_level' | 'nothing_on_route' | 'avoided' | 'partially_avoided' | 'avoid_failed'
+  | 'ranked'
 
 export interface Explanation {
   status: PlanStatus
   level: number
   avoid_types: ZoneType[]
+  hard_types: ZoneType[]
+  soft_types: ZoneType[]
+  clear_option: { added_duration_s: number; added_distance_m: number } | null
   avoided_zones: ZoneRef[]
   passed_zones: PassedZone[]
   added_duration_s: number

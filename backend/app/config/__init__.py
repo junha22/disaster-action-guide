@@ -26,11 +26,32 @@ class ZoneTypeConfig(_Strict):
     weight: float = Field(ge=0, le=10)
     avoid_buffer_m: float = Field(ge=0, le=200)
     color: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
+    entry_penalty_s: float = Field(default=0, ge=0, le=3600)
+    per_m_penalty_s: float = Field(default=0, ge=0, le=60)
+
+
+class LevelAvoid(_Strict):
+    """Types avoided at one rain level: hard = never chosen, soft = penalized (design.md 5.7)."""
+    hard: tuple[str, ...] = ()
+    soft: tuple[str, ...] = ()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_list(cls, value):
+        # Older format: a plain list meant "exclude these types" -> all hard.
+        if isinstance(value, (list, tuple)):
+            return {"hard": list(value), "soft": []}
+        return value
+
+    @property
+    def all(self) -> tuple[str, ...]:
+        wanted = set(self.hard) | set(self.soft)
+        return tuple(t for t in ZONE_TYPES if t in wanted)
 
 
 class RainLevels(_Strict):
     thresholds_mm: tuple[float, float, float]
-    avoid_by_level: dict[int, tuple[str, ...]]
+    avoid_by_level: dict[int, LevelAvoid]
 
     @model_validator(mode="after")
     def _check(self):
@@ -39,15 +60,19 @@ class RainLevels(_Strict):
             raise ValueError("thresholds_mm must be increasing values in (0, 300]")
         if sorted(self.avoid_by_level) != list(range(MAX_LEVEL + 1)):
             raise ValueError("avoid_by_level must define levels 0..3")
-        previous: set[str] = set()
+        previous_hard: set[str] = set()
+        previous_all: set[str] = set()
         for level in range(MAX_LEVEL + 1):
-            current = set(self.avoid_by_level[level])
-            unknown = current - set(ZONE_TYPES)
+            entry = self.avoid_by_level[level]
+            hard, soft = set(entry.hard), set(entry.soft)
+            unknown = (hard | soft) - set(ZONE_TYPES)
             if unknown:
                 raise ValueError(f"unknown zone types at level {level}: {sorted(unknown)}")
-            if not previous <= current:
+            if hard & soft:
+                raise ValueError(f"level {level}: a type cannot be both hard and soft")
+            if not (previous_hard <= hard and previous_all <= hard | soft):
                 raise ValueError("avoided types must accumulate as the level rises")
-            previous = current
+            previous_hard, previous_all = hard, hard | soft
         return self
 
 

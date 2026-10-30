@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label'
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { formatObserved } from '@/lib/format'
-import { ALERT_LABELS, avoidTypesFor, rainLevel } from '@/lib/level'
+import { ALERT_LABELS, avoidTypesFor, rainLevel, softTypesFor } from '@/lib/level'
 import type { SceneSpec, TimeOfDay } from '@/lib/scene'
 import type { Alert, AppConfig, WeatherInfo } from '@/lib/types'
 
@@ -47,7 +47,10 @@ export default function WeatherPanel(props: Props) {
     ? demoMode ? rainLevel(rain, alert, rules) : (available ? weather?.level ?? 0 : 0)
     : null
   const avoid = rules && level !== null ? avoidTypesFor(level, rules) : []
-  const avoidText = avoid.length ? avoid.map(t => config?.zone_types[t].label).join(', ') : '없음'
+  const soft = rules && level !== null ? softTypesFor(level, rules) : []
+  const avoidText = avoid.length
+    ? avoid.map(t => `${config?.zone_types[t].label}(${soft.includes(t) ? '되도록' : '반드시'})`).join(', ')
+    : '없음'
   const activeAlert = demoMode ? alert : weather?.alert ?? 'none'
 
   return (

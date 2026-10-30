@@ -122,6 +122,8 @@ FeatureCollection이다. geometry는 Polygon 또는 MultiPolygon이며, 버퍼�
 
 ### 4.3 더미 구역 배치
 
+> 병합(`f18abec`)으로 침수 이력은 실제 구청 자료 657곳(`risk_zones_guide.md`)으로 바뀌었다. 아래 표의 침수 이력 더미 2곳은 없어졌고, 지하차도·하천변 더미 4곳만 남았다. 실제 자료에서의 시나리오 A 결과는 5.7절 표를 본다.
+
 baseline 경로(광주송정역 → 광주역)는 광산로 → 상무대로 → 농성지하차도 → 죽봉대로(광주천 건넘) → 서암대로 → 광주역이다. 위치는 OpenStreetMap 도로와 하천을 참고했다(© OpenStreetMap 기여자, ODbL). 위험 여부 자체는 지어낸 값이다.
 
 | ID | 유형 | 위치 | 원본 |
@@ -182,9 +184,9 @@ class StrategyContext:
 | 이름 | 엔진 호출 | 동작 |
 | --- | --- | --- |
 | `baseline` | 1회(대안 2개 포함) | 회피 없음. 엔진 대안 경로를 alternatives에 담는다 |
-| `hard_exclude` | 2회 | 사용 중 구역 세 유형을 모두 제외한다 |
-| `tiered_rain` (화면 기본값) | 0단계 1회, 그 외 2회 | 단계별 유형을 제외한다. 회피 경로 요청에 대안 2개를 함께 받아 alternatives에 담는다 |
-| `rerank` | 4회 | 후보: baseline + 엔진 대안 2개, 지하차도 제외, 지하차도+침수 이력 제외, 세 유형 제외. `소요시간(초) + λ × 위험 노출 점수`가 가장 작은 후보를 고른다. 동점이면 후보 순서가 앞선 것을 고르고, 나머지는 alternatives에 담는다 |
+| `hard_exclude` | 1회 + 탐색 최대 8회 | 세 유형 모두 '반드시 피함'. 5.7 후보 모음에서 세 유형을 지나지 않는 가장 빠른 후보를 고른다 |
+| `tiered_rain` (화면 기본값) | 0단계 1회, 그 외 1회 + 탐색 최대 8회 | 단계별 '반드시 피함'·'되도록 피함'(요구사항 4.5 표)으로 5.7 비용 선택을 한다 |
+| `rerank` | 1회 + 제외 조합 3개 × 탐색 최대 8회 | 후보: baseline + 엔진 대안 2개, 지하차도 제외·지하차도+침수 이력 제외·세 유형 제외 각각의 탐색 후보 전부. `소요시간(초) + λ × 위험 노출 점수`가 가장 작은 후보를 고른다. 동점이면 후보 순서가 앞선 것을 고르고, 나머지는 alternatives에 담는다 |
 
 같은 입력이면 같은 결과다(요구사항 4.10). 구역은 `id` 순으로 처리하고 무작위 요소를 쓰지 않는다.
 
@@ -196,7 +198,7 @@ class StrategyContext:
 
 ### 5.4 회피 실패 (요구사항 4.9, 5.5)
 
-다음 경우에는 baseline 경로를 route로 돌려준다. explanation에는 `status: "avoid_failed"`, 경고 "위험 구역을 피하는 경로를 찾지 못했습니다", 이유, 경로가 지나는 위험 구역 목록을 담는다. 제외를 단계적으로 풀어 다시 찾는 방식은 쓰지 않는다.
+'반드시 피함' 구역을 지나지 않는 후보가 하나도 없을 때 baseline 경로를 route로 돌려준다. explanation에는 `status: "avoid_failed"`, 경고 "위험 구역을 피하는 경로를 찾지 못했습니다", 이유, 경로가 지나는 위험 구역 목록을 담는다. 제외를 단계적으로 풀어 다시 찾는 방식은 쓰지 않는다. 이유는 5.7 탐색이 멈춘 원인으로 정한다. '되도록 피함' 구역만 남으면 실패가 아니라 `partially_avoided`다(5.5).
 
 | 원인 | 판정 방법 | 이유 문구 (초안) |
 | --- | --- | --- |
@@ -215,12 +217,14 @@ baseline 자체를 찾지 못하면 422 "두 지점 사이 자동차 경로를 �
 | `baseline` | baseline 알고리즘 | "회피 없이 최단 시간으로 찾은 경로입니다" |
 | `no_avoid_level` | tiered_rain 0단계 | "현재 강수 단계에서는 피하는 구역이 없습니다" |
 | `nothing_on_route` | baseline이 피할 유형의 구역을 지나지 않음 | "이 경로에는 지금 피해야 할 구역이 없습니다" |
-| `avoided` | 회피 경로를 찾음 | 피한 구역 목록과 추가 시간 |
+| `avoided` | 고른 경로가 피할 유형(반드시+되도록)의 구역을 하나도 지나지 않음 | 피한 구역 목록과 추가 시간 |
+| `partially_avoided` | '반드시 피함'은 모두 피했지만 '되도록 피함' 구역 일부를 지남 | "지하차도 구역은 모두 피했고, 침수 이력 구역 2곳(75m)은 지납니다." + 모두 피하는 후보와의 시간 차이("모두 피하면 +5분 40초" / "모두 피하는 경로를 찾지 못했습니다"). 주의 표시(노란 상자) |
 | `avoid_failed` | 5.4 | 경고, 이유, 지나는 구역 |
 | `ranked` | rerank | "소요시간과 위험 노출 점수의 합이 가장 작은 경로입니다" |
 
 - 피한 구역 = baseline이 지나지만 선택 경로는 지나지 않는 구역
 - 지나는 구역 = 선택 경로가 지나는 구역과 그 길이
+- explanation에 `hard_types`, `soft_types`(단계별 반드시·되도록 피함 유형), `clear_option`(모두 피하는 가장 빠른 후보의 `{added_duration_s, added_distance_m}` 또는 `null`)을 더한다. `avoid_types`는 두 목록을 합친 것이다(화면 강조·기존 호환).
 
 ### 5.6 파라미터 (요구사항 4.7)
 
@@ -232,28 +236,60 @@ baseline 자체를 찾지 못하면 422 "두 지점 사이 자동차 경로를 �
 | `weights.{유형}` | 전체 | 0~10 |
 | `rain_thresholds_mm` | tiered_rain | 값 3개, 0 초과 300 이하, 증가 순 |
 | `alert_min_level.{advisory, warning}` | tiered_rain | 0~3 정수, advisory ≤ warning |
+| `entry_penalty_s.{유형}` | tiered_rain | 0~3600 |
+| `per_m_penalty_s.{유형}` | tiered_rain | 0~60 |
 | `lambda` | rerank | 0~10 |
 
 ```yaml
 version: 1
 zone_types:
-  underpass:     {label: 지하차도,  weight: 3, avoid_buffer_m: 30, color: "#dc2626"}
-  flood_history: {label: 침수 이력, weight: 2, avoid_buffer_m: 20, color: "#ea580c"}
-  riverside:     {label: 하천변,    weight: 1, avoid_buffer_m: 50, color: "#2563eb"}
+  underpass:     {label: 지하차도,  weight: 3, avoid_buffer_m: 30, color: "#dc2626", entry_penalty_s: 600, per_m_penalty_s: 2}
+  flood_history: {label: 침수 이력, weight: 2, avoid_buffer_m: 20, color: "#ea580c", entry_penalty_s: 120, per_m_penalty_s: 1}
+  riverside:     {label: 하천변,    weight: 1, avoid_buffer_m: 50, color: "#2563eb", entry_penalty_s: 60,  per_m_penalty_s: 0.5}
 rain_levels:
   thresholds_mm: [30, 50, 70]
-  avoid_by_level:
-    0: []
-    1: [underpass]
-    2: [underpass, flood_history]
-    3: [underpass, flood_history, riverside]
+  avoid_by_level:          # hard: 반드시 피함, soft: 되도록 피함 (요구사항 4.5)
+    0: {hard: [], soft: []}
+    1: {hard: [underpass], soft: []}
+    2: {hard: [underpass], soft: [flood_history]}
+    3: {hard: [underpass, flood_history, riverside], soft: []}
 alert_min_level: {advisory: 1, warning: 2}
 default_strategy: tiered_rain
 strategies:
   rerank: {lambda: 1.0}
 ```
 
+- 벌점(초안)은 "이 구역 하나를 피하려고 감수할 우회 시간(초)"이다. 침수 이력 120초 + 1m당 1초면, 75m를 지나는 경로가 모두 피하는 경로보다 270초 넘게 빠를 때 그 경로를 고른다. 벌점은 그 유형이 '되도록 피함'인 단계에서만 쓴다.
+- 설정 검사: hard와 soft는 겹치지 않는다, 단계가 오를수록 hard 목록과 hard+soft 목록이 줄지 않는다. 예전 목록 형식(`2: [underpass, flood_history]`)도 읽으며, 이때는 모두 hard다.
+
 설정은 첫 요청에서 읽고 바로 검사한다. 모르는 유형, 증가 순이 아닌 기준값, 음수 가중치가 있으면 원인을 적은 설정 오류(500)를 낸다. 같은 검사를 자동 테스트로도 돌린다.
+
+### 5.7 후보 탐색과 비용 선택 (B안, `strategies/base.py`)
+
+실제 침수 자료(657곳)는 한꺼번에 제외하면 엔진 한도를 넘는다. 그래서 '경로가 지나는 구역만 제외하고 다시 계산'을 반복한다. 반복은 병합된 `route_excluding`에서 시작했다. 예전에는 마지막 회차 결과만 써서, 중간 회차의 더 좋은 경로를 버렸다. 시나리오 A의 55mm에서 3회차 대안 928초, 5회차 대안 1268초(모두 회피)가 나왔는데 8회차의 1298초가 남았다.
+
+1. **후보 모음 (`collect_candidates`)**
+   - baseline 요청에 대안 2개를 받는다.
+   - 피할 유형(hard+soft) 중 경로가 지나는 구역을 제외 목록에 넣고 다시 계산한다(대안 2개 포함). 새 경로가 지나는 피할 유형 구역을 목록에 더하며 최대 8회 반복한다.
+   - 모든 회차의 경로와 대안을 형상 기준으로 중복 없이 모은다.
+   - 다음 경우에 멈춘다: 새 구역이 없음, 남은 시간 1초 미만(`MIN_ROUND_TIME_S`), 엔진 한도 초과, 엔진 오류(도착 불가·근처 도로 없음). 멈춘 이유는 실패 문구(5.4)에 쓴다. 시간 때문에 멈췄는데 유효한 후보가 없으면 "제한 시간 안에 우회 경로 계산을 끝내지 못했습니다"다.
+   - 대안 경로는 회차마다 요청한다. 시나리오 A에서 가장 좋은 경로가 중간 회차의 대안에서 나왔기 때문이다. 로컬 측정에서 8회차 전체가 0.31초에서 0.38초로 늘었다. 남은 시간이 3초(`ALTERNATES_MIN_TIME_S`)보다 적으면 대안 없이 요청한다. 병합된 원격 코드는 "마지막 회차에만 대안 요청"이었는데, B안에 맞춰 이렇게 바꿨다.
+   - 출발지·목적지를 덮는 '되도록 피함' 구역은 제외 목록에 넣지 않는다(엔진이 경로를 못 찾게 되므로). 벌점으로만 다룬다.
+2. **거르기**: '반드시 피함' 구역을 지나는 후보는 버린다. 남은 것이 없으면 `avoid_failed`(5.4)다.
+3. **비용**: `소요시간(초) + Σ(되도록 피함 구역마다 entry_penalty_s + per_m_penalty_s × 통과 길이)`. 가장 작은 후보를 고른다. 동점이면 먼저 찾은 후보를 고른다.
+4. **결과**
+   - 고른 경로가 '되도록 피함' 구역을 지나지 않으면 `avoided`, 지나면 `partially_avoided`다.
+   - `clear_option`은 피할 유형을 하나도 지나지 않는 가장 빠른 후보다.
+   - alternatives는 남은 유효 후보를 비용 순으로 최대 3개 담는다.
+
+시뮬레이션(실제 Valhalla, 병합된 침수 자료, 광주송정역 → 광주역):
+
+| 강수량 | 지금 | B안 |
+| --- | --- | --- |
+| 0mm | 931초 | 931초 |
+| 35mm | 946초, 지하차도 회피 | 946초 |
+| 55mm | 1298초, 22.8km | 928초, 14.4km, 침수 구역 2곳(75m) 지남 → 일부 회피 |
+| 75mm | 1298초, 22.8km | 1268초, 20.9km, 모두 회피 |
 
 ## 6. 경로 엔진 어댑터 (요구사항 5)
 
@@ -492,7 +528,7 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 
 ## 15. 시연 시나리오 확인 방법
 
-- **A**: 데모 모드, 광주송정역 → 광주역, tiered_rain, 0 → 35 → 55 → 75mm. 단계마다 1회 다시 계산되고 4.3절 표처럼 바뀌는지 본다.
+- **A**: 데모 모드, 광주송정역 → 광주역, tiered_rain, 0 → 35 → 55 → 75mm. 단계마다 1회 다시 계산되고 5.7절 표처럼 바뀌는지 본다(55mm는 일부 회피).
 - **B**: 카카오 키가 없으므로 대체 흐름으로 확인한다. 안내 문구 → 데모 지점에서 광주역 선택 → 경로 표시. 키가 있을 때의 흐름은 MockTransport 테스트로 확인한다.
 - **C**: 기상청 키가 없으므로 대체 흐름으로 확인한다. "기상 정보를 가져오지 못했습니다" → 데모 모드로 전환 → 결과에 "실제 강수 미반영"
 - **D**: 35mm 이상에서 목적지를 '농성사거리(시나리오 D용)'로 정한다. 경고, 이유, 지나는 구역과 함께 baseline이 나오는지 본다.

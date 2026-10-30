@@ -53,3 +53,11 @@
   - [x] 11.2 키 없이 B, C 대체 흐름, 알고리즘 교체, 현재 위치(위치 재정의), 네트워크 기록 확인
   - [x] 11.3 전체 pytest(176개), build, lint 최종 실행
 - [x] 12. 결과 보고
+- [x] 13. 비용 기반 단계 회피 (B안, 설계 5.7, 요구사항 4.5·4.9 변경분)
+  - [x] 13.1 `strategies.yaml`: 단계별 hard/soft, 유형별 진입·m당 벌점. 설정 검사(겹침, 누적, 예전 목록 형식)
+  - [x] 13.2 `strategies/params.py`: 벌점 덮어쓰기(tiered_rain), `ResolvedParams`에 hard/soft·벌점
+  - [x] 13.3 `strategies/base.py`: `collect_candidates`(모든 회차·대안 보존, 멈춘 이유), 비용 선택, `partially_avoided`, `clear_option`
+  - [x] 13.4 `tiered_rain`, `hard_exclude`, `rerank`를 후보 모음으로 전환
+  - [x] 13.5 API·app-config(`hard_by_level`, `soft_by_level`), 프론트(일부 회피 주의 상자, 단계 문구)
+  - [x] 13.6 테스트: hard 거르기, soft 비용 비교와 일부 회피, 벌점 덮어쓰기, 중간 회차 후보 보존, 출발·목적지를 덮는 soft 구역, 설정 검사, 기존 테스트 갱신
+  - [x] 13.7 실제 타일로 시나리오 A·D 확인, 브라우저 확인, 전체 pytest(192개)·build·lint

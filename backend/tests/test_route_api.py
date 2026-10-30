@@ -150,6 +150,9 @@ def test_metadata_endpoints(setup):
     config = client.get("/api/app-config").json()
     assert config["level_rules"]["thresholds_mm"] == [30, 50, 70]
     assert config["level_rules"]["avoid_by_level"]["1"] == ["underpass"]
+    assert config["level_rules"]["avoid_by_level"]["2"] == ["underpass", "flood_history"]
+    assert config["level_rules"]["hard_by_level"]["2"] == ["underpass"]
+    assert config["level_rules"]["soft_by_level"]["2"] == ["flood_history"]
     assert len(client.get("/api/demo-points").json()) == 7
     assert client.get("/api/health").json()["status"] == "ok"
 

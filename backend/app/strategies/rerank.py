@@ -1,15 +1,10 @@
 """Pick the candidate with the smallest duration(s) + lambda x exposure score (requirement 4.6)."""
-from ..engines.base import ExcludeLimitExceeded, LocationNotRoutable, NoRouteFound
-from .base import (RoutePlan, RouteRequest, ScoredRoute, StrategyContext, baseline_routes, make_plan,
-                   route_excluding, scored, type_phrase)
+from .base import (RoutePlan, RouteRequest, ScoredRoute, StrategyContext, baseline_routes, collect_candidates,
+                   geometry_key, make_plan)
 from .params import RerankParams
 from .registry import register
 
 EXCLUSION_SETS = (("underpass",), ("underpass", "flood_history"), ("underpass", "flood_history", "riverside"))
-
-
-def _key(route: ScoredRoute) -> tuple:
-    return tuple(tuple(round(c, 6) for c in p) for p in route.osrm["geometry"]["coordinates"])
 
 
 @register("rerank")
@@ -28,15 +23,12 @@ class RerankStrategy:
             polygons = ctx.layer.avoid_polygons(types, ctx.params.avoid_buffer_m)
             if any(ctx.layer.containing(p, polygons) for p in (request.origin, request.destination)):
                 continue
-            try:
-                routes = route_excluding(ctx, request, types, polygons, passed, alternates=0)
-            except (NoRouteFound, ExcludeLimitExceeded, LocationNotRoutable):
-                continue
-            candidates.append(scored(ctx, routes[0], f"{type_phrase(ctx, types)} 제외"))
+            # Every round's route is a candidate, not only the last one (design.md 5.7).
+            candidates.extend(collect_candidates(ctx, request, types, polygons, passed, alternates=0).routes)
         unique: list[ScoredRoute] = []
         seen = set()
         for candidate in candidates:
-            key = _key(candidate)
+            key = geometry_key(candidate)
             if key not in seen:
                 seen.add(key)
                 unique.append(candidate)

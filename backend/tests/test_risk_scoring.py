@@ -75,9 +75,24 @@ def test_shipped_config_is_valid():
                                                      "color": "#000000"}),
     lambda d: d["rain_levels"]["avoid_by_level"].__setitem__(2, ["riverside"]),
     lambda d: d["alert_min_level"].__setitem__("advisory", 3),
+    lambda d: d["rain_levels"]["avoid_by_level"].__setitem__(2, {"hard": ["underpass"], "soft": ["underpass"]}),
+    lambda d: d["rain_levels"]["avoid_by_level"].__setitem__(
+        3, {"hard": [], "soft": ["underpass", "flood_history", "riverside"]}),
+    lambda d: d["zone_types"]["flood_history"].__setitem__("entry_penalty_s", -1),
 ])
 def test_invalid_config_is_rejected_with_reason(mutate):
     data = yaml.safe_load(config_module.CONFIG_PATH.read_text(encoding="utf-8"))
     mutate(data)
     with pytest.raises(ConfigError, match="strategies.yaml"):
         parse_config(data)
+
+
+def test_level_rules_hard_soft_and_legacy_list_format():
+    cfg = get_config().rain_levels.avoid_by_level
+    assert (cfg[2].hard, cfg[2].soft) == (("underpass",), ("flood_history",))
+    assert cfg[2].all == ("underpass", "flood_history")
+    data = yaml.safe_load(config_module.CONFIG_PATH.read_text(encoding="utf-8"))
+    data["rain_levels"]["avoid_by_level"] = {0: [], 1: ["underpass"], 2: ["underpass", "flood_history"],
+                                             3: ["underpass", "flood_history", "riverside"]}
+    legacy = parse_config(data).rain_levels.avoid_by_level
+    assert legacy[2].hard == ("underpass", "flood_history") and legacy[2].soft == ()

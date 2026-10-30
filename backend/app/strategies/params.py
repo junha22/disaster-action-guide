@@ -31,6 +31,18 @@ class AlertOverrides(_Overrides):
     warning: int | None = Field(None, ge=0, le=3)
 
 
+class EntryPenaltyOverrides(_Overrides):
+    underpass: float | None = Field(None, ge=0, le=3600)
+    flood_history: float | None = Field(None, ge=0, le=3600)
+    riverside: float | None = Field(None, ge=0, le=3600)
+
+
+class PerMetrePenaltyOverrides(_Overrides):
+    underpass: float | None = Field(None, ge=0, le=60)
+    flood_history: float | None = Field(None, ge=0, le=60)
+    riverside: float | None = Field(None, ge=0, le=60)
+
+
 class CommonParams(_Overrides):
     avoid_buffer_m: BufferOverrides | None = None
     weights: WeightOverrides | None = None
@@ -39,6 +51,8 @@ class CommonParams(_Overrides):
 class TieredParams(CommonParams):
     rain_thresholds_mm: tuple[float, float, float] | None = None
     alert_min_level: AlertOverrides | None = None
+    entry_penalty_s: EntryPenaltyOverrides | None = None
+    per_m_penalty_s: PerMetrePenaltyOverrides | None = None
 
     @field_validator("rain_thresholds_mm")
     @classmethod
@@ -85,7 +99,15 @@ def resolve(config: AppConfig, model: type[BaseModel], overrides: dict[str, Any]
     lambda_ = getattr(parsed, "lambda_", None)
     if lambda_ is None:
         lambda_ = float(config.strategies.get("rerank", {}).get("lambda", 1.0))
+    entry = _merge({t: config.zone_types[t].entry_penalty_s for t in ZONE_TYPES},
+                   getattr(parsed, "entry_penalty_s", None))
+    per_m = _merge({t: config.zone_types[t].per_m_penalty_s for t in ZONE_TYPES},
+                   getattr(parsed, "per_m_penalty_s", None))
+    levels = config.rain_levels.avoid_by_level
     return ResolvedParams(
         avoid_buffer_m=buffers, weights=weights, thresholds_mm=tuple(thresholds), alert_min_level=alert,
-        avoid_by_level={k: tuple(v) for k, v in config.rain_levels.avoid_by_level.items()},
+        avoid_by_level={k: v.all for k, v in levels.items()},
+        hard_by_level={k: tuple(v.hard) for k, v in levels.items()},
+        soft_by_level={k: tuple(v.soft) for k, v in levels.items()},
+        entry_penalty_s=entry, per_m_penalty_s=per_m,
         labels={t: config.zone_types[t].label for t in ZONE_TYPES}, lambda_=float(lambda_))

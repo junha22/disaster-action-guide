@@ -82,7 +82,9 @@ function timeNote(addedSeconds: number): string {
 export default function RouteResultCard({ config, result, showBaseline, onShowBaselineChange, starting, onStartDrive }: Props) {
   const e = result.explanation
   const failed = e.status === 'avoid_failed'
-  const avoided = e.avoided_zones.length > 0
+  // Partial avoidance still passes some soft zones: never shown with the "safe" check mark.
+  const partial = e.status === 'partially_avoided'
+  const avoided = e.avoided_zones.length > 0 && !partial
 
   return (
     <div className="space-y-3" data-testid="route-result" data-status={e.status} data-level={e.level} aria-live="polite">
@@ -102,6 +104,17 @@ export default function RouteResultCard({ config, result, showBaseline, onShowBa
         <div role="alert" className="space-y-1 rounded-lg border border-red-400/50 bg-red-500/15 p-3 text-sm">
           {e.failure_reason && <p>이유: {e.failure_reason}</p>}
           <p className="text-xs">아래 경로는 회피하지 못한 기본 경로입니다. 안전한 경로가 아닙니다.</p>
+        </div>
+      )}
+      {partial && (
+        <div role="alert" className="space-y-1 rounded-lg border border-amber-300/60 bg-amber-400/15 p-3 text-sm">
+          <p className="font-semibold">일부 회피 · {e.warning ?? '일부 위험 구역을 지나는 경로입니다.'}</p>
+          <p className="text-xs">
+            {e.clear_option
+              ? `모두 피하는 경로는 ${signed(e.clear_option.added_duration_s, formatDuration)}, 거리 ${signed(e.clear_option.added_distance_m, formatDistance)}입니다.`
+              : '피할 구역을 모두 피하는 경로를 찾지 못했습니다.'}
+            {' '}지나는 구역은 아래 목록과 지도에서 확인하세요.
+          </p>
         </div>
       )}
 
