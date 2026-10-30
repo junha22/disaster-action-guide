@@ -43,7 +43,17 @@ def test_every_type_has_an_active_zone_and_dummies_are_marked():
     layer = RiskLayer.from_geojson(DATA)
     assert {z.type for z in layer.active()} == set(ZONE_TYPES)
     for zone in layer.zones:
-        assert zone.is_dummy and "더미" in zone.source_name and "더미" in zone.name
+        if zone.is_dummy:
+            assert "더미" in zone.source_name and "더미" in zone.name
+        else:  # real public data (data_pipeline/sources/gwangju_flood_zones.geojson)
+            assert "더미" not in zone.source_name and "더미" not in zone.name
+            assert zone.source_url.startswith("https://www.data.go.kr/")
+
+
+def test_real_flood_history_zones_are_included():
+    real = [z for z in RiskLayer.from_geojson(DATA).active(["flood_history"]) if not z.is_dummy]
+    assert len(real) == 657
+    assert all(z.id.startswith("FLD-") for z in real)
 
 
 def bowtie(feature):

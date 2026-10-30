@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from ..config import ZONE_TYPES
 from ..engines.base import (ExcludeLimitExceeded, LocationNotRoutable, LonLat, NoRouteFound,
                             OsrmRoute, RoutingEngine)
-from ..risk.layer import RiskLayer
+from ..risk.layer import AvoidPolygon, RiskLayer
 from ..risk.scoring import Exposure, score_route
 
 
@@ -179,6 +179,44 @@ def type_phrase(ctx: StrategyContext, types: Sequence[str]) -> str:
     return "·".join(ctx.params.labels[t] for t in types)
 
 
+# Rounds of "exclude the zones the route passes, route again" before giving up.
+MAX_EXCLUDE_ROUNDS = 8
+
+
+def route_excluding(ctx: StrategyContext, request: RouteRequest, types: Sequence[str],
+                    polygons: Sequence[AvoidPolygon], start_ids: Iterable[str],
+                    alternates: int) -> list[OsrmRoute]:
+    """Exclude only the zones a route actually passes, adding more until the route is clear.
+
+    Real data has hundreds of zones; sending all of them at once exceeds the engine's
+    exclude_polygons limits (risk_zones_guide.md 6-3 ④). Starts from `start_ids` (the zones the
+    baseline passes) and, each round, adds the avoided-type zones the new route still passes.
+    Raises ExcludeLimitExceeded when the chosen set goes over the engine limits; engine errors
+    propagate. Returns the last routes; the caller checks whether zones are left on them.
+    """
+    by_id = {p.zone.id: p for p in polygons}
+    chosen = sorted(i for i in set(start_ids) if i in by_id)
+    limits = ctx.engine.exclude_limits()
+    routes: list[OsrmRoute] = []
+    for round_no in range(MAX_EXCLUDE_ROUNDS):
+        if round_no and ctx.remaining() < 1.0:
+            break
+        selected = [by_id[i] for i in chosen]
+        if (sum(p.perimeter_m for p in selected) > limits.max_perimeter_m
+                or sum(p.vertices for p in selected) > limits.max_vertices):
+            raise ExcludeLimitExceeded()
+        routes = ctx.engine.route(request.origin, request.destination,
+                                  exclude_polygons=[r for p in selected for r in p.rings],
+                                  alternates=alternates, timeout_s=ctx.remaining())
+        passed = score_route(routes[0]["geometry"]["coordinates"], ctx.layer,
+                             ctx.params.weights).zone_ids(types)
+        new = sorted(i for i in passed if i in by_id and i not in chosen)
+        if not new:  # clear, or the engine went through an excluded zone (caller reports it)
+            break
+        chosen.extend(new)
+    return routes
+
+
 def avoid_plan(ctx: StrategyContext, request: RouteRequest, types: Iterable[str],
                empty_status: str = "no_avoid_level") -> RoutePlan:
     """Exclude active zones of `types`; fall back to the baseline with a warning (requirement 4.9)."""
@@ -198,14 +236,9 @@ def avoid_plan(ctx: StrategyContext, request: RouteRequest, types: Iterable[str]
         inside = ctx.layer.containing(point, polygons)
         if inside:
             return failed(f"{role}가 '{inside[0].name}' 구역 안에 있습니다.")
-    limits = ctx.engine.exclude_limits()
-    if (sum(p.perimeter_m for p in polygons) > limits.max_perimeter_m
-            or sum(p.vertices for p in polygons) > limits.max_vertices):
-        return failed(REASON_LIMIT)
-    rings = [ring for p in polygons for ring in p.rings]
     try:
-        routes = ctx.engine.route(request.origin, request.destination, exclude_polygons=rings,
-                                  alternates=2, timeout_s=ctx.remaining())
+        routes = route_excluding(ctx, request, types, polygons, baseline.exposure.zone_ids(types),
+                                 alternates=2)
     except NoRouteFound:
         return failed(REASON_NO_PATH)
     except ExcludeLimitExceeded:

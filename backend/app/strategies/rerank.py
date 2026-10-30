@@ -1,7 +1,7 @@
 """Pick the candidate with the smallest duration(s) + lambda x exposure score (requirement 4.6)."""
 from ..engines.base import ExcludeLimitExceeded, LocationNotRoutable, NoRouteFound
 from .base import (RoutePlan, RouteRequest, ScoredRoute, StrategyContext, baseline_routes, make_plan,
-                   scored, type_phrase)
+                   route_excluding, scored, type_phrase)
 from .params import RerankParams
 from .registry import register
 
@@ -21,20 +21,15 @@ class RerankStrategy:
     def plan(self, request: RouteRequest, ctx: StrategyContext) -> RoutePlan:
         candidates = baseline_routes(ctx, request, alternates=2)
         baseline = candidates[0]
-        limits = ctx.engine.exclude_limits()
         for types in EXCLUSION_SETS:
-            polygons = ctx.layer.avoid_polygons(types, ctx.params.avoid_buffer_m)
-            if not polygons:
+            passed = baseline.exposure.zone_ids(types)
+            if not passed:  # excluding zones the baseline does not touch gives the baseline again
                 continue
+            polygons = ctx.layer.avoid_polygons(types, ctx.params.avoid_buffer_m)
             if any(ctx.layer.containing(p, polygons) for p in (request.origin, request.destination)):
                 continue
-            if (sum(p.perimeter_m for p in polygons) > limits.max_perimeter_m
-                    or sum(p.vertices for p in polygons) > limits.max_vertices):
-                continue
             try:
-                routes = ctx.engine.route(request.origin, request.destination,
-                                          exclude_polygons=[r for p in polygons for r in p.rings],
-                                          timeout_s=ctx.remaining())
+                routes = route_excluding(ctx, request, types, polygons, passed, alternates=0)
             except (NoRouteFound, ExcludeLimitExceeded, LocationNotRoutable):
                 continue
             candidates.append(scored(ctx, routes[0], f"{type_phrase(ctx, types)} 제외"))

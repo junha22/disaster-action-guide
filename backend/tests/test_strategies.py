@@ -161,6 +161,19 @@ def test_missing_baseline_raises_route_not_found():
         run("tiered_rain", rn1=75, fake=engine(error=NoRouteFound()))
 
 
+def test_only_zones_on_the_route_are_excluded_and_new_ones_are_added():
+    # 'far' is never on a route: it must not be sent. 'second' lies only on the first detour,
+    # so a second round adds it and the route moves to the next detour.
+    far = make_zone("far", "flood_history", square(126.85, LAT + 0.05, 100))
+    second = make_zone("second", "flood_history", square(126.86, LAT + 0.005, 100))
+    plan, fake = run("tiered_rain", rn1=55, layer=corridor_layer([far, second]))
+    assert plan.explanation.status == "avoided"
+    assert len(fake.calls) == 3
+    assert len(fake.calls[1]["exclude_polygons"]) == 2  # z-underpass, z-flood_history
+    assert len(fake.calls[2]["exclude_polygons"]) == 3  # + second
+    assert label_of(plan) == "avoid-all"
+
+
 def test_nothing_on_route_skips_the_exclusion_call():
     far = make_zone("far", "underpass", square(126.85, LAT + 0.05, 100))
     plan, fake = run("hard_exclude", layer=corridor_layer_without_route(far))
