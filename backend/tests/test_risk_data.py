@@ -61,7 +61,7 @@ def test_real_flood_zones_have_terrain_tiers():
     layer = RiskLayer.from_geojson(DATA)
     real = [z for z in layer.active(["flood_history"]) if not z.is_dummy]
     counts = {t: sum(z.tier == t for z in real) for t in ("high", "normal", "raised")}
-    assert counts == {"high": 182, "normal": 360, "raised": 115}
+    assert counts == {"high": 126, "normal": 416, "raised": 115}  # pipeline.yaml: low_pct < 15 -> high
     assert all(z.tier_reason for z in real)
     assert all(z.group == f"flood_history.{z.tier}" for z in real)
     # zones without elevation are never put in a lower tier

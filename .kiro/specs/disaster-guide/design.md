@@ -301,9 +301,11 @@ strategies:
 
 | 등급 (키) | 조건 | 구역 수 |
 | --- | --- | --- |
-| 우선 회피 (`high`) | `flood_count` ≥ 2, 또는 `low_pct` < 20, 또는 `elev_status`가 `정상`이 아님(고도 없음 16, 일부 범위 밖 11) | 182 |
-| 일반 (`normal`) | 나머지 중 `low_pct` < 50 | 360 |
+| 우선 회피 (`high`) | `flood_count` ≥ 2, 또는 `low_pct` < 15, 또는 `elev_status`가 `정상`이 아님(고도 없음 16, 일부 범위 밖 11) | 126 |
+| 일반 (`normal`) | 나머지 중 `low_pct` < 50 | 416 |
 | 주변보다 높은 편 (`raised`) | 1회 침수이고 `low_pct` ≥ 50 | 115 |
+
+기준값은 처음에 가이드의 20으로 했다가 15(값 있는 구역의 하위 약 10%)로 바꿨다. 20에서는 시나리오 A의 55mm·75mm가 같은 경로였다(아래 표).
 
 - 등급이 없거나 모르는 값인 침수 이력 구역(예전 자료, 손으로 넣은 구역)은 우선 회피로 본다.
 - 회피 규칙의 단위는 **그룹**이다. 지하차도·하천변은 유형 이름 그대로(`underpass`, `riverside`), 침수 이력은 등급별(`flood_history.high`, `flood_history.normal`, `flood_history.raised`)이다. `strategies.yaml`에 유형 이름(`flood_history`)을 쓰면 그 유형의 모든 등급이다. 등급 목록은 `config.ZONE_TIERS`에 고정하고, yaml의 `zone_types.flood_history.tiers`가 같은 키를 가져야 한다.
@@ -325,11 +327,11 @@ strategies:
   - explanation의 `hard_types`·`soft_types`는 `hard_groups`·`soft_groups`로 바꾸고 `avoid_groups`를 더한다. `avoid_types`는 그룹이 하나라도 걸린 유형이다(기존 호환).
 - 화면: 지도는 현재 단계에서 피하는 그룹만 진하게 그린다. 범례는 유형 일부만 피하면 "일부 회피 대상"이라고 쓴다. 강수 단계 문구와 팝업에 등급을 보여준다.
 - 경로 설명(18절): 사실 JSON의 침수 이력 구역에 `회피_등급`을 더한다. 등급이 낮다고 지나도 된다고 쓰지 않도록 규칙을 한 줄 더한다.
-- 한계: DEM 격자(90m)가 구역(중앙값 지름 약 60m)보다 거칠다. 기준값 20·50과 배율은 검증된 값이 아니다(가이드 6-7). 시나리오 A의 55mm 경로가 지나던 FLD-BUK-0453은 `low_pct` 19.6이라 기준 바로 아래에서 우선 회피가 된다.
+- 한계: DEM 격자(90m)가 구역(중앙값 지름 약 60m)보다 거칠다. 기준값 15·50과 배율은 검증된 값이 아니다(가이드 6-7). 시나리오 A의 55mm 경로가 지나는 FLD-BUK-0453은 `low_pct` 19.6이라 기준 20이면 우선 회피, 15면 일반이다.
 
-시뮬레이션(실제 Valhalla, tiered_rain, `.local-data/sim_routes.py`·`sim_threshold.py`). 15/50은 메모리에서만 다시 분류한 비교값이다. "등급 전"은 더미 구역이 있던 때의 값이고, 등급 열은 더미 구역 제거(`8acd948`) 후의 값이다.
+시뮬레이션(실제 Valhalla, tiered_rain, `.local-data/sim_routes.py`·`sim_threshold.py`). "등급 전"은 더미 구역이 있던 때의 값이고, 등급 열은 더미 구역 제거(`8acd948`) 후의 값이다.
 
-| 구간 | 강수량 | 등급 전 | 등급 20/50 (현재) | 등급 15/50 (비교) |
+| 구간 | 강수량 | 등급 전 | 등급 20/50 (이전) | 등급 15/50 (현재) |
 | --- | --- | --- | --- | --- |
 | A 광주송정역 → 광주역 | 0mm | 931초 | 931초 | 931초 |
 | | 35mm | 946초, 지하차도만 회피 | 863초, 회피 | 833초, 회피 |
@@ -340,7 +342,7 @@ strategies:
 | | 55mm | 433초, 일부 회피 | 433초, 일부 회피(주변보다 높은 편 1곳) | 433초 |
 | | 75mm | 회피 실패 | 회피 실패 | 회피 실패 |
 
-20/50에서는 시나리오 A의 55mm와 75mm가 같은 경로가 된다(`check_demo_scenario.py`가 `SCENARIO_A_SOME_STEPS_EQUAL`을 낸다).
+20/50에서는 시나리오 A의 55mm와 75mm가 같은 경로였다(`check_demo_scenario.py`가 `SCENARIO_A_SOME_STEPS_EQUAL`을 냈다).
 
 ## 6. 경로 엔진 어댑터 (요구사항 5)
 

@@ -13,10 +13,11 @@ default_radius_m:
 # Flood-history terrain tiers (design.md 5.8), written as risk_tier / tier_reason.
 # high: flood_count >= repeat_count, low_pct < high_below_low_pct, or elevation missing/partial.
 # raised: 1회 침수 and low_pct >= raised_from_low_pct. normal: the rest.
-# Starting values, not validated (risk_zones_guide(DEM).md 6-7).
+# Starting values, not validated (risk_zones_guide(DEM).md 6-7). 15 (about the lowest 10%) instead
+# of the guide's 20: with 20 scenario A gave the same route at 55 and 75 mm (design.md 5.8).
 flood_tiers:
   repeat_count: 2
-  high_below_low_pct: 20
+  high_below_low_pct: 15
   raised_from_low_pct: 50
 
 sources:
