@@ -6,6 +6,7 @@ version: 1
 # type, used only at levels where the type is "soft" (되도록 피함). See design.md 5.7.
 # tiers (flood_history only, design.md 5.8): terrain tiers written by data_pipeline as risk_tier.
 # penalty_scale multiplies the type's soft penalty for zones of that tier.
+# avoid_buffer_m does not apply to zones with block points, as the shipped underpasses (design.md 4.5).
 zone_types:
   underpass:     {label: 지하차도,  weight: 3, avoid_buffer_m: 30, color: "#dc2626", entry_penalty_s: 600, per_m_penalty_s: 2}
   flood_history:

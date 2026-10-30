@@ -332,8 +332,13 @@ def common_candidates(ctx: StrategyContext, request: RouteRequest) -> CandidateP
         usable = [p for p in polygons if p.zone.group in groups and p.zone.id not in blocked]
         key = frozenset(p.zone.id for p in usable)
         if key not in searched:  # sets that differ only by groups without zones search the same
-            result = collect_candidates(ctx, request, groups, usable, first.exposure.zone_ids(groups), seed=routes)
-            routes, searched[key] = result.routes, result.stop_reason
+            # Block points are tiny, so every underpass is out from the first round. Starting from
+            # the first route and from all three finds different detours; neither covers the other.
+            from_first = first.exposure.zone_ids(groups) | {p.zone.id for p in usable if p.zone.block_points}
+            from_all = from_first.union(*(r.exposure.zone_ids(groups) for r in seed))
+            for start in (from_first,) if from_all == from_first else (from_first, from_all):
+                result = collect_candidates(ctx, request, groups, usable, start, seed=routes)
+                routes, searched[key] = result.routes, result.stop_reason
         stops[groups] = searched[key]
     fastest = min(range(len(routes)), key=lambda i: routes[i].osrm["duration"])  # ties: found first
     if fastest:

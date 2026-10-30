@@ -26,7 +26,7 @@ def test_ids_unique_types_allowed_and_sources_present():
     assert {p["type"] for p in props} <= set(ZONE_TYPES)
     for p in props:
         assert p["source_name"].strip() and p["source_url"].startswith("https://")
-        assert p["checked_at"] == "2026-10-30"
+        assert p["checked_at"] == ("2026-10-31" if p["type"] == "underpass" else "2026-10-30")
 
 
 def test_geometries_are_valid_polygons_inside_gwangju():
@@ -46,7 +46,7 @@ def test_only_real_public_data_is_shipped():
     for zone in layer.zones:
         assert not zone.is_dummy
         assert "더미" not in zone.source_name and "더미" not in zone.name
-        assert zone.source_url.startswith("https://www.data.go.kr/")
+        assert zone.source_url.startswith(("https://www.data.go.kr/", "https://www.openstreetmap.org/"))
     assert layer.to_geojson()["metadata"]["has_dummy"] is False
 
 
@@ -71,8 +71,38 @@ def test_real_flood_zones_have_terrain_tiers():
         assert zone.properties()["risk_tier"] is None and "low_pct" not in zone.properties()
 
 
+def test_shipped_underpasses_are_tied_to_osm_tunnels():
+    """design.md 4.5: the list minus the point without an OSM tunnel."""
+    underpasses = RiskLayer.from_geojson(DATA).active(["underpass"])
+    assert len(underpasses) == 22
+    assert "운암지하차도" not in {z.name for z in underpasses}
+    for zone in underpasses:
+        assert zone.id.startswith("UND-") and zone.name.endswith("지하차도")
+        assert zone.centerline and len(zone.block_points) == len(zone.centerline)
+        assert all(way.distance(point) < 1 for way, point in zip(zone.centerline, zone.block_points))
+        assert "centerline" not in zone.properties()  # not sent to the browser
+
+
 def first_flood(data):
     return next(f for f in data["features"] if f["properties"]["type"] == "flood_history")
+
+
+def first_underpass(data):
+    return next(f for f in data["features"] if f["properties"]["type"] == "underpass")
+
+
+@pytest.mark.parametrize("mutate, expected", [
+    (lambda p: p.pop("centerline"), "centerline must be a MultiLineString"),
+    (lambda p: p.__setitem__("centerline", {"type": "Point", "coordinates": [126.85, 35.15]}), "MultiLineString"),
+    (lambda p: p.pop("block_points"), "block_points must be"),
+    (lambda p: p.__setitem__("block_points", []), "block_points must be"),
+    (lambda p: p.__setitem__("block_points", [[126.85]]), "block_points must be"),
+    (lambda p: p.__setitem__("type", "riverside"), "centerline is for underpass zones only"),
+])
+def test_validator_rejects_bad_underpass_properties(mutate, expected):
+    data = copy.deepcopy(DATA)
+    mutate(first_underpass(data)["properties"])
+    assert any(expected in e for e in validate_zone_collection(data))
 
 
 @pytest.mark.parametrize("mutate, expected", [

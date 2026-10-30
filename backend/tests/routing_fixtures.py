@@ -1,8 +1,8 @@
 """Synthetic zones and candidate routes for tests. No real engine, network or data files."""
-from shapely.geometry import box
+from shapely.geometry import LineString, MultiLineString, Point, box
 
 from app.risk.layer import RiskLayer, RiskZone
-from app.risk.geo import to_metric
+from app.risk.geo import to_metric, to_wgs84
 
 LAT = 35.15
 ORIGIN = (126.80, LAT)
@@ -19,11 +19,18 @@ def square(lon: float, lat: float, half_m: float):
 
 
 def make_zone(zone_id: str, zone_type: str, geometry, active: bool = True, name: str | None = None,
-              tier: str | None = None):
+              tier: str | None = None, **extra):
     """tier: flood_history terrain tier; None means unknown, which routing treats as "high"."""
     return RiskZone(id=zone_id, name=name or zone_id, type=zone_type, active=active,
                     source_name="test", source_url="https://www.data.go.kr", checked_at="2026-10-30",
-                    is_dummy=True, note="", geometry=geometry, metric=to_metric(geometry), tier=tier)
+                    is_dummy=True, note="", geometry=geometry, metric=to_metric(geometry), tier=tier, **extra)
+
+
+def make_underpass(zone_id: str, ways, blocks):
+    """An underpass as the pipeline ships it: map polygon, tunnel lines, block points (design.md 4.5)."""
+    polygon = to_wgs84(to_metric(MultiLineString(ways)).buffer(12))
+    return make_zone(zone_id, "underpass", polygon, centerline=tuple(to_metric(LineString(w)) for w in ways),
+                     block_points=tuple(to_metric(Point(b)) for b in blocks))
 
 
 def corridor_layer(extra=(), flood_tier: str = "normal") -> RiskLayer:

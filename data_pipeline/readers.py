@@ -1,11 +1,15 @@
 """Source readers. Each returns records: dicts with id, name, type, geometry (GeoJSON),
 source_name, source_url, checked_at and optional active, is_dummy, note, radius_m.
 
-The seed reader and the processed flood-zone GeoJSON reader work. The other raw formats are
+The seed, processed flood-zone GeoJSON and underpass list readers work. The other raw formats are
 not fixed yet (requirements: 팀 확정 필요).
 """
+import csv
 import json
 from pathlib import Path
+import sys
+
+from zones import match_underpasses
 
 # Korean type names used by the processed flood-zone file (risk_zones_guide.md) -> app type ids.
 KOREAN_TYPES = {"침수 이력": "flood_history", "지하차도": "underpass", "하천변": "riverside"}
@@ -64,9 +68,20 @@ def read_flood_zone_geojson(path: Path) -> list[dict]:
     return records
 
 
-def read_underpass_csv(path: Path) -> list[dict]:
-    """공공데이터포털 지하차도 목록(점). Columns and coordinate system to be confirmed."""
-    raise NotImplementedError("지하차도 원본 형식이 정해지면 구현한다")
+def read_underpass_csv(path: Path, tunnels: str, match_radius_m: float, **source: str) -> list[dict]:
+    """지하차도 위치 목록(시설물명, 위도, 경도)을 OSM 터널 구간에 맞춘다 (design.md 4.5).
+
+    `tunnels`는 목록과 같은 폴더의 extract_osm_tunnels.py 결과다. `source`는 출처 속성이다.
+    맞는 터널이 없는 좌표는 빼고 알린다.
+    """
+    with path.open(encoding="utf-8-sig", newline="") as file:
+        points = [{"name": row["시설물명"], "lon": float(row["경도"]), "lat": float(row["위도"])}
+                  for row in csv.DictReader(file)]
+    ways = json.loads(path.with_name(tunnels).read_text(encoding="utf-8"))["features"]
+    records, unmatched = match_underpasses(points, ways, match_radius_m)
+    if unmatched:
+        print(f"UNDERPASS_UNMATCHED: {', '.join(unmatched)}", file=sys.stderr)
+    return [{**source, **record} for record in records]
 
 
 def read_flood_trace_shp(path: Path) -> list[dict]:

@@ -6,7 +6,7 @@ output: ../backend/app/data/risk_zones.geojson
 # This is the zone itself. The extra avoidance buffer used for routing lives in
 # backend/app/config/strategies.yaml (avoid_buffer_m).
 default_radius_m:
-  underpass:     {Point: 50, LineString: 12}
+  underpass:     {Point: 50, LineString: 12, MultiLineString: 12}
   flood_history: {Point: 30, LineString: 12}
   riverside:     {LineString: 40}
 
@@ -22,11 +22,20 @@ flood_tiers:
 
 sources:
   # Real data only. The hand-drawn dummy zones (sources/dummy_seed.json) were removed on
-  # 2026-10-30; underpass and riverside have no zones until real data is added.
+  # 2026-10-30; riverside has no zones until real data is added.
   # 광주 북구·서구·광산구 침수 피해 기록 2021~2025 -> 657 flood_history polygons, with DEM
   # elevation (see risk_zones_guide(DEM).md at the repository root).
   - {reader: flood_zone_geojson, path: sources/gwangju_flood_zones.geojson}
+  # Underpass list (points) tied to OSM tunnels (design.md 4.5). sources/osm_tunnels.geojson comes
+  # from extract_osm_tunnels.py. Points without a tunnel are left out and reported on stderr.
+  # The source of the list is not confirmed yet: replace source_name when it is.
+  - reader: underpass_csv
+    path: sources/gwangju_underpasses.csv
+    tunnels: osm_tunnels.geojson
+    match_radius_m: 60
+    source_name: 지하차도 위치 목록(출처 확인 중)·OpenStreetMap
+    source_url: https://www.openstreetmap.org/copyright
+    checked_at: "2026-10-31"
   # Other real data, once downloaded (readers are placeholders in readers.py):
-  # - {reader: underpass_csv, path: raw/underpasses.csv}
   # - {reader: flood_trace_shp, path: raw/flood_traces.shp}
   # - {reader: river_centerline, path: raw/rivers.geojson}

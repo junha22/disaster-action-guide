@@ -124,6 +124,77 @@ def test_only_flood_records_get_terrain_and_tier():
         zones.build_collection([flood], RADIUS)
 
 
+def tunnel_way(osm_id, coordinates, block):
+    return {"type": "Feature", "properties": {"osm_id": osm_id, "highway": "primary", "name": None,
+                                              "block_point": block},
+            "geometry": {"type": "LineString", "coordinates": coordinates}}
+
+
+# Two carriageways of one tunnel, 11 m apart, and another tunnel far to the east.
+WAYS = [tunnel_way("w1", [[126.85, 35.15], [126.851, 35.15]], [126.8502, 35.15]),
+        tunnel_way("w2", [[126.85, 35.1501], [126.851, 35.1501]], [126.8508, 35.1501]),
+        tunnel_way("w3", [[126.90, 35.15], [126.901, 35.15]], [126.9005, 35.15])]
+
+
+def test_underpass_point_takes_every_way_of_its_tunnel_and_misses_are_reported():
+    points = [{"name": "가지하차도", "lon": 126.8505, "lat": 35.15},
+              {"name": "없는지하차도", "lon": 126.87, "lat": 35.15},
+              {"name": "나지하차도", "lon": 126.9005, "lat": 35.1503}]
+    records, unmatched = zones.match_underpasses(points, WAYS, 60)
+    assert unmatched == ["없는지하차도"]
+    assert [r["id"] for r in records] == ["UND-001", "UND-003"]  # ids follow the list order
+    assert records[0]["block_points"] == [[126.8502, 35.15], [126.8508, 35.1501]]
+    assert records[0]["geometry"] == {"type": "MultiLineString", "coordinates": [WAYS[0]["geometry"]["coordinates"],
+                                                                                 WAYS[1]["geometry"]["coordinates"]]}
+    assert len(records[1]["block_points"]) == 1
+
+
+def test_two_points_on_one_tunnel_stop_the_build():
+    points = [{"name": "가", "lon": 126.8505, "lat": 35.15}, {"name": "나", "lon": 126.8506, "lat": 35.15}]
+    with pytest.raises(zones.PipelineError, match="same tunnel"):
+        zones.match_underpasses(points, WAYS, 60)
+
+
+def test_underpass_reader_and_collection_keep_tunnel_lines(tmp_path, capsys):
+    from readers import read_underpass_csv
+
+    source = tmp_path / "underpasses.csv"
+    source.write_text("시설물명,위도,경도\n가지하차도,35.15,126.8505\n없는지하차도,35.15,126.87\n", encoding="utf-8-sig")
+    (tmp_path / "tunnels.geojson").write_text(json.dumps({"features": WAYS}), encoding="utf-8")
+    [rec] = read_underpass_csv(source, "tunnels.geojson", 60, source_name="목록",
+                               source_url="https://www.openstreetmap.org/copyright", checked_at="2026-10-31")
+    assert capsys.readouterr().err.strip() == "UNDERPASS_UNMATCHED: 없는지하차도"
+    assert rec["source_name"] == "목록" and rec["name"] == "가지하차도"
+    data = zones.build_collection([rec], {"underpass": {"MultiLineString": 12}})
+    zones.check(data)
+    [feature] = data["features"]
+    assert feature["geometry"]["type"] == "Polygon"  # both carriageways in one corridor
+    assert feature["properties"]["centerline"]["type"] == "MultiLineString"
+    assert len(feature["properties"]["block_points"]) == 2
+
+
+def test_block_point_stays_away_from_the_road_over_the_tunnel():
+    from extract_osm_tunnels import tunnel_features
+
+    def way(osm_id, coordinates, **tags):
+        return {"type": "Feature", "id": osm_id, "properties": tags,
+                "geometry": {"type": "LineString", "coordinates": coordinates}}
+
+    crossing = [[126.8505, 35.145], [126.8505, 35.155]]
+    features = [way("w9", [[126.85, 35.15], [126.851, 35.15]], highway="primary", tunnel="yes", name="터널"),
+                way("w8", crossing, highway="secondary"),
+                way("w7", [[126.84, 35.15], [126.841, 35.15]], highway="footway", tunnel="yes"),
+                way("w6", [[126.86, 35.15], [126.861, 35.15]], highway="motorway", tunnel="yes")]
+    [tunnel] = tunnel_features(features)
+    props = tunnel["properties"]
+    assert (props["osm_id"], props["name"]) == ("w9", "터널")
+    road = to_metric(LineString(crossing))
+    assert to_metric(Point(props["block_point"])).distance(road) == pytest.approx(props["block_clearance_m"], abs=0.1)
+    assert props["block_clearance_m"] > 30  # the middle would be on the road
+    assert to_metric(LineString(tunnel["geometry"]["coordinates"])).distance(
+        to_metric(Point(props["block_point"]))) < 1
+
+
 def test_flood_reader_passes_elevation_through(tmp_path):
     from readers import read_flood_zone_geojson
 

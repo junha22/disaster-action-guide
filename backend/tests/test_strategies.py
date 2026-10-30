@@ -13,7 +13,8 @@ from app.strategies import registry
 from app.strategies.base import RouteNotFound, RouteRequest, StrategyContext
 from app.strategies.params import ParamsError, resolve
 
-from routing_fixtures import CANDIDATES, DESTINATION, LAT, ORIGIN, corridor_layer, make_zone, square
+from routing_fixtures import (CANDIDATES, DESTINATION, LAT, ORIGIN, corridor_layer, make_underpass, make_zone,
+                              square)
 
 NAMES = ["baseline", "hard_exclude", "tiered_rain", "rerank"]
 REQUEST = RouteRequest(ORIGIN, DESTINATION)
@@ -180,10 +181,11 @@ def test_only_zones_on_the_route_are_excluded_and_new_ones_are_added():
     second = make_zone("second", "flood_history", square(126.86, LAT + 0.005, 100))
     plan, fake = run("tiered_rain", rn1=55, layer=corridor_layer([far, second]))
     assert plan.explanation.status == "avoided"
-    # plain request; level 1 search (z-underpass); level 2 search (+ z-flood_history, then + second);
-    # level 3 search (z-underpass, z-flood_history, z-riverside)
-    assert [len(c["exclude_polygons"]) for c in fake.calls] == [0, 1, 2, 3, 3]
-    assert [c["alternates"] for c in fake.calls[1:]] == [2, 2, 2, 2]  # enough budget: alternates every round
+    # Each group set searches from the first route's zones, then from those of all three routes
+    # ('second' is on the third). Level 2 from the first route: z-underpass and z-flood_history,
+    # then 'second' is added. 'far' is never sent.
+    assert [len(c["exclude_polygons"]) for c in fake.calls] == [0, 1, 2, 2, 3, 3, 3, 4]
+    assert all(c["alternates"] == 2 for c in fake.calls[1:])  # enough budget: alternates every round
     assert label_of(plan) == "avoid-all"
 
 
@@ -332,7 +334,7 @@ def test_candidates_from_earlier_rounds_are_kept():
     plan, fake = run("hard_exclude", fake=engine(rows), layer=corridor_layer_without_route(zone_u, zone_a))
     assert plan.route.osrm["duration"] == 700.0 and plan.explanation.status == "avoided"
     assert plan.route.label == "탐색 1회차 대안 1"
-    assert len(fake.calls) == 3 and len(fake.calls[2]["exclude_polygons"]) == 2
+    assert [len(c["exclude_polygons"]) for c in fake.calls] == [0, 1, 2, 2]
 
 
 def detour_to(until_lon, lat):
@@ -444,6 +446,46 @@ def test_eta_never_falls_as_the_level_rises(rows, tier):
     durations = [p.route.osrm["duration"] for p in plans]
     assert durations == sorted(durations)
     assert all(p.explanation.added_duration_s >= 0 for p in plans)
+
+
+# ---- underpasses: tunnel lines and block points (design.md 4.5) --------------------------------
+
+TUNNEL = [(126.84, LAT), (126.841, LAT)]
+TUNNEL_BLOCK = (126.8402, LAT)
+BESIDE = 6 / 111_000  # a surface lane inside the 12 m map polygon
+THROUGH_TUNNEL = {"label": "tunnel", "coords": [ORIGIN, *TUNNEL, DESTINATION], "duration": 600.0}
+SURFACE = {"label": "surface", "duration": 640.0,
+           "coords": [ORIGIN, (126.84, LAT + BESIDE), (126.841, LAT + BESIDE), DESTINATION]}
+
+
+def tunnel_layer():
+    far = make_underpass("far", [[(126.87, LAT + 0.05), (126.871, LAT + 0.05)]], [(126.8702, LAT + 0.05)])
+    return corridor_layer_without_route(make_underpass("u", [TUNNEL], [TUNNEL_BLOCK]), far)
+
+
+def test_underpass_is_refused_at_level_1_but_the_lane_beside_it_stays_usable():
+    rows = [THROUGH_TUNNEL, SURFACE]
+    plan, _ = run("tiered_rain", rn1=0, fake=engine(rows), layer=tunnel_layer())
+    assert plan.route.osrm["duration"] == 600.0 and plan.explanation.status == "no_avoid_level"
+    assert [z["id"] for z in plan.explanation.passed_zones] == ["u"]
+    plan, _ = run("tiered_rain", rn1=35, fake=engine(rows), layer=tunnel_layer())
+    e = plan.explanation
+    assert plan.route.osrm["duration"] == 640.0 and e.status == "avoided"
+    assert [z["id"] for z in e.avoided_zones] == ["u"] and e.passed_zones == []
+
+
+def test_every_underpass_is_excluded_from_the_first_round_whatever_the_route_passes():
+    fastest_surface = {**SURFACE, "duration": 590.0}
+    plan, fake = run("tiered_rain", rn1=35, fake=engine([fastest_surface, THROUGH_TUNNEL]), layer=tunnel_layer())
+    assert plan.explanation.status == "nothing_on_route"
+    assert [len(c["exclude_polygons"]) for c in fake.calls] == [0, 2]  # one ring per block point
+
+
+def test_underpass_with_no_way_around_is_a_failure():
+    plan, _ = run("tiered_rain", rn1=35, fake=engine([THROUGH_TUNNEL]), layer=tunnel_layer())
+    e = plan.explanation
+    assert e.status == "avoid_failed" and "도착할 수 있는 경로가 없습니다" in e.failure_reason
+    assert [z["id"] for z in e.passed_zones] == ["u"]
 
 
 def test_group_sets_with_the_same_zones_are_searched_once():

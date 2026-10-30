@@ -76,4 +76,8 @@
   - [x] 15.1 `strategies/base.py`: `common_candidates`(단계별 회피 조합을 모두 탐색, 기본 경로는 후보 중 ETA 최소). 네 알고리즘을 공통 후보로 전환 (사용자 결정)
   - [x] 15.2 테스트: 0단계 최단, 알고리즘별 같은 기본 경로, 단계별 ETA 단조성, 같은 구역 조합 1회 탐색, 시간 부족 처리, 기존 테스트 갱신. 전체 pytest(302개)
   - [x] 15.3 실제 타일로 시나리오 A·D·E 확인(설계 5.7 표). 시나리오 A의 0mm와 35mm가 같아져 `check_demo_scenario.py`는 종료 코드 1
-  - [ ] 15.4 (사용자 결정 대기) 나머지 범위: 요청서 6절 이후, 지형 등급, 지하차도 자료와 판정, 회피 실패 처리, rerank 금지 규칙, requirements.md, 시연 구간
+  - [x] 15.4 지하차도 22곳 (설계 4.5): `extract_osm_tunnels.py`, `sources/osm_tunnels.geojson`, `read_underpass_csv`, `match_underpasses`, `pipeline.yaml`, 데이터 다시 생성
+  - [x] 15.5 터널 선으로 통과 판정(`scoring.tunnel_length`), 제외 지점(`layer.avoid_polygons`), 공통 후보의 두 시작점, 검증(`centerline`, `block_points`)
+  - [x] 15.6 테스트: 매칭·미매칭, 제외 지점 선택, 터널 통과·위쪽 도로·옆 차로 판정, 지상 차로 유지, 회피 불가. 전체 pytest(320개). 실제 타일 확인(설계 4.5, 5.7)
+  - [ ] 15.7 (사용자 확인 대기) 지하차도 목록의 출처. 확인되면 `pipeline.yaml`의 `source_name`을 고친다
+  - [ ] 15.8 (사용자 결정 대기) 나머지 범위: 요청서 6절 이후, 지형 등급, 회피 실패 처리, rerank 금지 규칙, requirements.md, 시연 구간

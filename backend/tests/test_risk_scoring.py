@@ -5,9 +5,10 @@ from shapely.geometry import LineString
 from app import config as config_module
 from app.config import ConfigError, get_config, parse_config, rain_level
 from app.risk.geo import to_metric
+from app.risk.layer import RiskLayer
 from app.risk.scoring import score_route
 
-from routing_fixtures import DESTINATION, LAT, ORIGIN, corridor_layer, make_zone, square
+from routing_fixtures import DESTINATION, LAT, ORIGIN, corridor_layer, make_underpass, make_zone, square
 
 WEIGHTS = {"underpass": 3.0, "flood_history": 2.0, "riverside": 1.0}
 
@@ -50,6 +51,48 @@ def test_avoid_polygons_add_buffer_and_detect_contained_points():
     inside_buffer = (126.82, LAT + (100 + 20) / 111_000)
     assert [z.id for z in layer.containing(inside_buffer, polygons)] == ["z-underpass"]
     assert layer.containing(ORIGIN, polygons) == []
+
+
+# ---- underpasses: judged on the tunnel line, excluded at a block point (design.md 4.5) ---------
+
+LONG_WAY = [(126.84, LAT), (126.841, LAT)]   # about 91 m
+SHORT_WAY = [(126.84, LAT), (126.8402, LAT)]  # about 18 m
+SIX_M = 6 / 111_000
+
+
+@pytest.mark.parametrize("way", [LONG_WAY, SHORT_WAY])
+def test_only_a_route_following_the_tunnel_passes_the_underpass(way):
+    zone = make_underpass("u", [way], [way[0]])
+    layer = RiskLayer([zone])
+    middle = (way[0][0] + way[1][0]) / 2
+    through = score_route([ORIGIN, *way, DESTINATION], layer, WEIGHTS)
+    assert through.zone_ids() == {"u"}
+    assert through.by_type_m["underpass"] == pytest.approx(zone.centerline[0].length)
+    assert through.score == pytest.approx(through.by_type_m["underpass"] * WEIGHTS["underpass"])
+    over = [(middle, LAT - 0.002), (middle, LAT + 0.002)]    # surface road crossing over the tunnel
+    beside = [(126.83, LAT + SIX_M), (126.85, LAT + SIX_M)]  # surface lane, inside the map polygon
+    for route in (over, beside):
+        assert to_metric(LineString(route)).intersects(zone.metric)
+        assert score_route(route, layer, WEIGHTS).zone_ids() == set()
+
+
+def test_block_points_replace_the_buffered_zone_for_the_engine():
+    zone = make_underpass("u", [LONG_WAY], [(126.8402, LAT)])
+    layer = RiskLayer([zone])
+    [polygon] = layer.avoid_polygons(["underpass"], {"underpass": 30})
+    assert polygon.rings[0][0] == polygon.rings[0][-1]
+    assert polygon.metric.area < 15  # a circle of 2 m radius, no 30 m buffer
+    assert polygon.metric.intersects(zone.centerline[0])
+    over_the_middle = to_metric(LineString([(126.8405, LAT - 0.002), (126.8405, LAT + 0.002)]))
+    assert not polygon.metric.intersects(over_the_middle)
+    assert layer.containing((126.8405, LAT), [polygon]) == []  # a point on the road above is not "inside"
+
+
+def test_two_block_points_give_one_polygon_with_two_rings():
+    zone = make_underpass("u", [LONG_WAY, [(126.84, LAT + SIX_M), (126.841, LAT + SIX_M)]],
+                          [(126.8402, LAT), (126.8408, LAT + SIX_M)])
+    [polygon] = RiskLayer([zone]).avoid_polygons(["underpass"], {"underpass": 30})
+    assert len(polygon.rings) == 2
 
 
 @pytest.mark.parametrize("rn1, alert, expected", [

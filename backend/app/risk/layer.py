@@ -6,8 +6,9 @@ from pathlib import Path
 import threading
 from typing import Any, Iterable, Sequence
 
-from shapely.geometry import MultiPolygon, Point, Polygon, mapping, shape
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon, mapping, shape
 from shapely.geometry.base import BaseGeometry
+from shapely.ops import unary_union
 
 from ..config import ZONE_TIERS, group_tier, zone_group
 from .geo import to_metric, to_wgs84
@@ -15,6 +16,8 @@ from .validation import TERRAIN_KEYS, validate_zone_collection
 
 DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "risk_zones.geojson"
 SIMPLIFY_M = 2.0
+# Every block point is at least 5.7 m from any surface road (extract_osm_tunnels.py).
+BLOCK_RADIUS_M = 2.0
 
 LonLat = tuple[float, float]
 Ring = list[list[float]]
@@ -43,6 +46,10 @@ class RiskZone:
     tier_reason: str | None = None
     # flood_count and DEM elevation facts for the map popup; not used for routing.
     terrain: dict[str, Any] | None = field(default=None, compare=False)
+    # Underpasses (design.md 4.5): the polygon is for the map. Passing is judged on these tunnel
+    # lines and only these points are excluded, so roads over or beside the tunnel stay usable.
+    centerline: tuple[LineString, ...] = field(default=(), compare=False)  # EPSG:5179
+    block_points: tuple[Point, ...] = field(default=(), compare=False)     # EPSG:5179
 
     @property
     def group(self) -> str:
@@ -86,12 +93,15 @@ class RiskLayer:
             p = feature["properties"]
             geometry = shape(feature["geometry"])
             terrain = {k: p[k] for k in TERRAIN_KEYS if k in p}
+            lines = shape(p["centerline"]).geoms if p.get("centerline") else ()
             zones.append(RiskZone(
                 id=p["id"], name=p["name"], type=p["type"], active=p["active"],
                 source_name=p["source_name"], source_url=p["source_url"],
                 checked_at=p["checked_at"], is_dummy=bool(p.get("is_dummy", False)),
                 note=p.get("note", ""), geometry=geometry, metric=to_metric(geometry),
-                tier=p.get("risk_tier"), tier_reason=p.get("tier_reason"), terrain=terrain or None))
+                tier=p.get("risk_tier"), tier_reason=p.get("tier_reason"), terrain=terrain or None,
+                centerline=tuple(to_metric(line) for line in lines),
+                block_points=tuple(to_metric(Point(xy)) for xy in p.get("block_points") or ())))
         return cls(zones)
 
     def active(self, types: Iterable[str] | None = None) -> list[RiskZone]:
@@ -101,10 +111,14 @@ class RiskLayer:
                 if z.active and (wanted is None or z.type in wanted or z.group in wanted)]
 
     def avoid_polygons(self, types: Iterable[str], buffers: dict[str, float]) -> list[AvoidPolygon]:
-        """Original zones grown by the per-type buffer, simplified, as lon/lat rings."""
+        """Original zones grown by the per-type buffer, simplified, as lon/lat rings.
+        Zones with block points send small circles around those instead (the buffer does not apply)."""
         result = []
         for zone in self.active(types):
-            grown = zone.metric.buffer(buffers[zone.type]).simplify(SIMPLIFY_M)
+            if zone.block_points:
+                grown = unary_union([p.buffer(BLOCK_RADIUS_M, quad_segs=2) for p in zone.block_points])
+            else:
+                grown = zone.metric.buffer(buffers[zone.type]).simplify(SIMPLIFY_M)
             parts = list(grown.geoms) if isinstance(grown, MultiPolygon) else [grown]
             rings: list[Ring] = []
             perimeter = 0.0

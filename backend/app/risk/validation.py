@@ -40,6 +40,22 @@ def _terrain_errors(props: dict, label: str) -> list[str]:
     return errors
 
 
+def _underpass_errors(props: dict, label: str) -> list[str]:
+    """centerline and block_points (design.md 4.5) come together, on underpasses only."""
+    line, points = props.get("centerline"), props.get("block_points")
+    if line is None and points is None:
+        return []
+    errors = []
+    if props.get("type") != "underpass":
+        errors.append(f"{label}: centerline is for underpass zones only")
+    if not isinstance(line, dict) or line.get("type") != "MultiLineString" or not line.get("coordinates"):
+        errors.append(f"{label}: centerline must be a MultiLineString")
+    if not (isinstance(points, list) and points
+            and all(isinstance(p, list) and len(p) == 2 and all(_is_number(v) for v in p) for p in points)):
+        errors.append(f"{label}: block_points must be a list of [lon, lat]")
+    return errors
+
+
 def validate_zone_collection(data: Any, bbox=SERVICE_BBOX) -> list[str]:
     """Return a list of problems; empty means valid."""
     errors: list[str] = []
@@ -65,6 +81,7 @@ def validate_zone_collection(data: Any, bbox=SERVICE_BBOX) -> list[str]:
         if not isinstance(props.get("active"), bool):
             errors.append(f"{label}: active must be true or false")
         errors.extend(_terrain_errors(props, label))
+        errors.extend(_underpass_errors(props, label))
         url = props.get("source_url")
         if isinstance(url, str) and not url.startswith(("https://", "http://")):
             errors.append(f"{label}: source_url must be an http(s) URL")
