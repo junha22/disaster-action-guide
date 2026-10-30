@@ -4,10 +4,40 @@ from typing import Any
 
 from shapely.geometry import shape
 
-from ..config import ZONE_TYPES
+from ..config import ZONE_TIERS, ZONE_TYPES
 from .geo import SERVICE_BBOX
 
 REQUIRED = ("id", "name", "type", "active", "source_name", "source_url", "checked_at")
+# Optional flood_history facts (design.md 4.1, 5.8). Missing means unknown.
+TERRAIN_KEYS = ("flood_count", "elev_m", "low_pct", "above_local_min_m", "elev_status")
+ELEV_STATUSES = ("정상", "일부 범위 밖", "범위 밖")
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _terrain_errors(props: dict, label: str) -> list[str]:
+    errors = []
+    tier = props.get("risk_tier")
+    if tier is not None:
+        allowed = ZONE_TIERS.get(props.get("type"), ())
+        if tier not in allowed:
+            errors.append(f"{label}: risk_tier must be one of {list(allowed)}")
+    count = props.get("flood_count")
+    if count is not None and not (isinstance(count, int) and not isinstance(count, bool) and count >= 1):
+        errors.append(f"{label}: flood_count must be a positive integer")
+    for key in ("elev_m", "low_pct", "above_local_min_m"):
+        value = props.get(key)
+        if value is not None and not _is_number(value):
+            errors.append(f"{label}: {key} must be a number or null")
+    low = props.get("low_pct")
+    if _is_number(low) and not 0 <= low <= 100:
+        errors.append(f"{label}: low_pct must be between 0 and 100")
+    status = props.get("elev_status")
+    if status is not None and status not in ELEV_STATUSES:
+        errors.append(f"{label}: elev_status must be one of {list(ELEV_STATUSES)}")
+    return errors
 
 
 def validate_zone_collection(data: Any, bbox=SERVICE_BBOX) -> list[str]:
@@ -34,6 +64,7 @@ def validate_zone_collection(data: Any, bbox=SERVICE_BBOX) -> list[str]:
             errors.append(f"{label}: type must be one of {list(ZONE_TYPES)}")
         if not isinstance(props.get("active"), bool):
             errors.append(f"{label}: active must be true or false")
+        errors.extend(_terrain_errors(props, label))
         url = props.get("source_url")
         if isinstance(url, str) and not url.startswith(("https://", "http://")):
             errors.append(f"{label}: source_url must be an http(s) URL")

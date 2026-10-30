@@ -9,6 +9,8 @@ from pathlib import Path
 
 # Korean type names used by the processed flood-zone file (risk_zones_guide.md) -> app type ids.
 KOREAN_TYPES = {"침수 이력": "flood_history", "지하차도": "underpass", "하천변": "riverside"}
+# Optional per-zone facts passed through unchanged (design.md 4.1, 5.8).
+TERRAIN_KEYS = ("flood_count", "elev_m", "low_pct", "above_local_min_m", "elev_status")
 
 
 def read_seed_json(path: Path) -> list[dict]:
@@ -26,6 +28,7 @@ def read_flood_zone_geojson(path: Path) -> list[dict]:
 
     - type: 한글 유형 -> 앱 유형 ID, verified_date -> checked_at
     - source_url: 지도 팝업 링크가 깨지지 않게 첫 번째 URL만 쓰고, 전체 목록은 note에 남긴다.
+    - flood_count와 DEM 고도 속성(있으면)은 그대로 넘긴다. 등급은 zones.py가 정한다.
     """
     data = json.loads(path.read_text(encoding="utf-8"))
     records = []
@@ -43,7 +46,10 @@ def read_flood_zone_geojson(path: Path) -> list[dict]:
             note_parts.append(f"위치 정확도 {p['location_accuracy']}")
         if len(urls) > 1:
             note_parts.append("출처 전체: " + " ; ".join(urls))
+        # Repeat count and DEM elevation (risk_zones_guide(DEM).md 3-3); zones.py derives risk_tier.
+        terrain = {k: p[k] for k in TERRAIN_KEYS if k in p}
         records.append({
+            **terrain,
             "id": p.get("id") or feature.get("id"),
             "name": p.get("name"),
             "type": zone_type,

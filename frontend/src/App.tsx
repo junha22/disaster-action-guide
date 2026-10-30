@@ -9,7 +9,7 @@ import WeatherCanvas from '@/components/WeatherCanvas'
 import WeatherPanel from '@/components/WeatherPanel'
 import { Button } from '@/components/ui/button'
 import { api, errorMessage } from '@/lib/api'
-import { avoidTypesFor, rainLevel } from '@/lib/level'
+import { avoidGroupsFor, rainLevel } from '@/lib/level'
 import { useIsWide } from '@/lib/media'
 import { currentTimeOfDay, weatherScene, type TimeOfDay } from '@/lib/scene'
 import { dummyNotice } from '@/lib/zones'
@@ -151,13 +151,14 @@ function App() {
     clearResult()
   }
 
-  const highlightTypes = useMemo(() => {
-    if (result) return result.explanation.avoid_types
+  // Avoidance groups drawn strongly on the map (design.md 5.8): from the result, else the current level.
+  const highlightGroups = useMemo(() => {
+    if (result) return result.explanation.avoid_groups
     if (!config) return []
     const level = choice.demoMode
       ? rainLevel(choice.rain, choice.alert, config.level_rules)
       : (weather?.available ? weather.level ?? 0 : 0)
-    return avoidTypesFor(level, config.level_rules)
+    return avoidGroupsFor(level, config.level_rules)
   }, [result, config, choice, weather])
 
   const alternatives = useMemo(() => result?.alternatives.map(a => a.geometry) ?? [], [result])
@@ -211,7 +212,7 @@ function App() {
       <div className="map-frame relative h-[45vh] shrink-0 lg:h-full lg:flex-1">
         <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">
           <Loader2 className="mr-2 size-4 animate-spin" />지도를 불러오는 중</div>}>
-          <MapView zones={zones} zoneTypes={config?.zone_types ?? null} highlightTypes={highlightTypes}
+          <MapView zones={zones} config={config ?? null} highlightGroups={highlightGroups}
             passedZoneIds={passedZoneIds} floatingCard={isWide && Boolean(result)}
             route={result?.route.geometry ?? null} baseline={result?.baseline.geometry ?? null}
             alternatives={alternatives} showBaseline={showBaseline} origin={origin} destination={destination} />

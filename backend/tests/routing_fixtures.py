@@ -18,14 +18,19 @@ def square(lon: float, lat: float, half_m: float):
     return box(lon - dx, lat - dy, lon + dx, lat + dy)
 
 
-def make_zone(zone_id: str, zone_type: str, geometry, active: bool = True, name: str | None = None):
+def make_zone(zone_id: str, zone_type: str, geometry, active: bool = True, name: str | None = None,
+              tier: str | None = None):
+    """tier: flood_history terrain tier; None means unknown, which routing treats as "high"."""
     return RiskZone(id=zone_id, name=name or zone_id, type=zone_type, active=active,
                     source_name="test", source_url="https://www.data.go.kr", checked_at="2026-10-30",
-                    is_dummy=True, note="", geometry=geometry, metric=to_metric(geometry))
+                    is_dummy=True, note="", geometry=geometry, metric=to_metric(geometry), tier=tier)
 
 
-def corridor_layer(extra=()) -> RiskLayer:
-    zones = [make_zone(f"z-{t}", t, square(lon, LAT, 100)) for t, lon in ZONE_CENTRES.items()]
+def corridor_layer(extra=(), flood_tier: str = "normal") -> RiskLayer:
+    """One zone per type on the straight route. The flood zone is "normal": not avoided at level 1,
+    soft at level 2, hard at level 3 (design.md 5.8)."""
+    zones = [make_zone(f"z-{t}", t, square(lon, LAT, 100), tier=flood_tier if t == "flood_history" else None)
+             for t, lon in ZONE_CENTRES.items()]
     return RiskLayer([*zones, *extra])
 
 

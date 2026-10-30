@@ -1,4 +1,6 @@
 export type ZoneType = 'underpass' | 'flood_history' | 'riverside'
+// Avoidance group: a type, or "flood_history.high" etc. for flood terrain tiers (design.md 5.8).
+export type ZoneGroup = string
 export type Alert = 'none' | 'advisory' | 'warning'
 export type LonLat = [number, number]
 
@@ -8,11 +10,18 @@ export interface ZoneTypeInfo {
   weight: number
 }
 
+export interface ZoneGroupInfo {
+  type: ZoneType
+  tier: string | null
+  label: string             // "침수 이력(우선 회피)"
+  tier_label: string | null // "우선 회피"
+}
+
 export interface LevelRules {
   thresholds_mm: number[]
-  avoid_by_level: Record<string, ZoneType[]>  // hard + soft
-  hard_by_level: Record<string, ZoneType[]>   // 반드시 피함
-  soft_by_level: Record<string, ZoneType[]>   // 되도록 피함
+  avoid_by_level: Record<string, ZoneGroup[]>  // hard + soft
+  hard_by_level: Record<string, ZoneGroup[]>   // 반드시 피함
+  soft_by_level: Record<string, ZoneGroup[]>   // 되도록 피함
   alert_min_level: { advisory: number; warning: number }
 }
 
@@ -20,6 +29,7 @@ export interface AppConfig {
   search_mode: 'kakao' | 'demo'
   service_area_bbox: [number, number, number, number]
   zone_types: Record<ZoneType, ZoneTypeInfo>
+  zone_groups: Record<ZoneGroup, ZoneGroupInfo>
   level_rules: LevelRules
   default_strategy: string
 }
@@ -92,9 +102,10 @@ export type PlanStatus =
 export interface Explanation {
   status: PlanStatus
   level: number
-  avoid_types: ZoneType[]
-  hard_types: ZoneType[]
-  soft_types: ZoneType[]
+  avoid_types: ZoneType[]  // types with at least one avoided group
+  avoid_groups: ZoneGroup[]
+  hard_groups: ZoneGroup[]
+  soft_groups: ZoneGroup[]
   clear_option: { added_duration_s: number; added_distance_m: number } | null
   avoided_zones: ZoneRef[]
   passed_zones: PassedZone[]
@@ -180,6 +191,15 @@ export interface ZoneProperties extends ZoneRef {
   checked_at: string
   is_dummy: boolean
   note: string
+  group: ZoneGroup
+  risk_tier: string | null
+  tier_reason: string | null
+  // flood_history only (DEM elevation, risk_zones_guide(DEM).md); null when unknown
+  flood_count?: number | null
+  elev_m?: number | null
+  low_pct?: number | null
+  above_local_min_m?: number | null
+  elev_status?: string | null
 }
 
 export interface ZoneFeatureCollection {

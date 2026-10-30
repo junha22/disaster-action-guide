@@ -58,7 +58,8 @@ SYSTEM_PROMPT = """너는 호우 위험 회피 경로 서비스에서 경로 선
 3. 과거 기록을 바탕으로 한 자료다. 지금 침수됐는지, 앞으로 침수될지는 말하지 않는다.
 4. 다른 경로를 추천하지 않는다. 운전, 출발, 이동을 권하거나 말리지 않는다.
 5. 대체_계산이 true이면 기본 후보가 모두 위험 구역을 지나 다른 경로 엔진으로 따로 계산했다는 사실을 한 번 말한다.
-6. 좌표, 링크, 목록 기호, 제목 없이 문장만 쓴다."""
+6. 좌표, 링크, 목록 기호, 제목 없이 문장만 쓴다.
+7. 회피_등급은 강수 단계마다 어느 침수 이력 구역부터 피할지 정한 분류다. 등급을 이유로 지나도 된다거나 덜 위험하다고 쓰지 않는다."""
 
 QUERY = "추천 경로를 고른 이유를 2~3문장으로 설명해 주세요."
 
@@ -75,6 +76,8 @@ BANNED_PATTERNS = [re.compile(p) for p in (
     r"(?:출발|이동)\s*(?:하세요|하십시오|해\s*주세요)",
     r"다른\s*경로\s*(?:를|로)\s*(?:이용|추천|선택)",
     r"https?://",
+    r"덜\s*위험",                        # rule 7: a tier is not a lower risk
+    r"지나도\s*(?:돼|되|괜찮)",
 )]
 NUMBER = re.compile(r"\d+(?:\.\d+)?")
 SENTENCE_END = re.compile(r"[.!?。](?:\s|$)")
@@ -127,7 +130,8 @@ def _evidence(zone: RiskZone) -> str:
     return zone.source_name
 
 
-def _zone_facts(items: Iterable[ZoneLength], zones: dict[str, RiskZone], labels: dict[str, str]) -> dict:
+def _zone_facts(items: Iterable[ZoneLength], zones: dict[str, RiskZone], labels: dict[str, str],
+                tier_labels: dict[str, str] | None = None) -> dict:
     resolved = []
     for item in items:
         zone = zones.get(item.id)
@@ -135,8 +139,14 @@ def _zone_facts(items: Iterable[ZoneLength], zones: dict[str, RiskZone], labels:
             raise UnknownZone(item.id)
         resolved.append((zone, item.length_m))
     resolved.sort(key=lambda pair: (-pair[1], pair[0].id))
-    listed = [{"종류": labels.get(z.type, z.type), "이름": z.name, "근거": _evidence(z),
-               "길이_m": int(round(length))} for z, length in resolved[:MAX_ZONES_IN_FACTS]]
+    listed = []
+    for z, length in resolved[:MAX_ZONES_IN_FACTS]:
+        fact = {"종류": labels.get(z.type, z.type), "이름": z.name, "근거": _evidence(z),
+                "길이_m": int(round(length))}
+        tier = (tier_labels or {}).get(z.group)  # flood_history terrain tier (design.md 5.8)
+        if tier:
+            fact["회피_등급"] = tier
+        listed.append(fact)
     return {"위험_구간_수": len(resolved), "위험_구간": listed}
 
 
@@ -153,25 +163,28 @@ def needs_ai(data: ExplainInput) -> bool:
     return True
 
 
-def build_facts(data: ExplainInput, zones: dict[str, RiskZone], labels: dict[str, str]) -> dict[str, Any]:
+def build_facts(data: ExplainInput, zones: dict[str, RiskZone], labels: dict[str, str],
+                tier_labels: dict[str, str] | None = None) -> dict[str, Any]:
+    """`tier_labels`: avoidance group -> tier label ("flood_history.high" -> "우선 회피")."""
     mode = ALERT_MODES.get(data.alert, f"강수 {data.level}단계")
     facts: dict[str, Any] = {"모드": mode, "강수_단계": data.level}
     route_min, base_min = _minutes(data.route_duration_s), _minutes(data.baseline_duration_s)
+
+    def zone_facts(items):
+        return _zone_facts(items, zones, labels, tier_labels)
+
     if data.status == "avoid_failed":
         facts["결과"] = AVOID_FAILED_RESULT
-        facts["추천"] = {"경로": "일반 경로", "소요시간_분": base_min,
-                       **_zone_facts(data.baseline_zones, zones, labels)}
+        facts["추천"] = {"경로": "일반 경로", "소요시간_분": base_min, **zone_facts(data.baseline_zones)}
     elif not needs_ai(data):
         facts["결과"] = MESSAGES.get(data.status, MESSAGES["ranked"])
-        facts["추천"] = {"경로": "일반 경로", "소요시간_분": route_min,
-                       **_zone_facts(data.route_zones, zones, labels)}
+        facts["추천"] = {"경로": "일반 경로", "소요시간_분": route_min, **zone_facts(data.route_zones)}
     else:
         if data.status == "partially_avoided":
             facts["결과"] = PARTIAL_RESULT
         facts["추천"] = {"경로": "회피 경로" if data.status == "avoided" else "추천 경로",
-                       "소요시간_분": route_min, **_zone_facts(data.route_zones, zones, labels)}
-        facts["비교"] = {"경로": "일반 경로", "소요시간_분": base_min,
-                       **_zone_facts(data.baseline_zones, zones, labels)}
+                       "소요시간_분": route_min, **zone_facts(data.route_zones)}
+        facts["비교"] = {"경로": "일반 경로", "소요시간_분": base_min, **zone_facts(data.baseline_zones)}
         facts["추가_소요시간_분"] = route_min - base_min
     facts["대체_계산"] = bool(data.fallback_engine)
     return facts
@@ -298,8 +311,9 @@ def _converse(facts_json: str, cfg: Settings) -> tuple[str | None, str | None]:
     return " ".join(p["text"].strip() for p in parts if "text" in p).strip(), None
 
 
-def explain(data: ExplainInput, zones: dict[str, RiskZone], labels: dict[str, str]) -> ExplainResult:
-    facts = build_facts(data, zones, labels)
+def explain(data: ExplainInput, zones: dict[str, RiskZone], labels: dict[str, str],
+            tier_labels: dict[str, str] | None = None) -> ExplainResult:
+    facts = build_facts(data, zones, labels, tier_labels)
     fallback = template_text(facts)
 
     def use_template(reason: str) -> ExplainResult:

@@ -87,12 +87,60 @@ def test_invalid_config_is_rejected_with_reason(mutate):
         parse_config(data)
 
 
+FLOOD_GROUPS = ("flood_history.high", "flood_history.normal", "flood_history.raised")
+
+
 def test_level_rules_hard_soft_and_legacy_list_format():
     cfg = get_config().rain_levels.avoid_by_level
-    assert (cfg[2].hard, cfg[2].soft) == (("underpass",), ("flood_history",))
+    assert (cfg[1].hard_groups, cfg[1].soft_groups) == (("underpass",), ("flood_history.high",))
+    assert (cfg[2].hard_groups, cfg[2].soft_groups) == (("underpass", "flood_history.high"),
+                                                        ("flood_history.normal", "flood_history.raised"))
+    assert cfg[3].hard_groups == ("underpass", *FLOOD_GROUPS, "riverside")
     assert cfg[2].all == ("underpass", "flood_history")
     data = yaml.safe_load(config_module.CONFIG_PATH.read_text(encoding="utf-8"))
     data["rain_levels"]["avoid_by_level"] = {0: [], 1: ["underpass"], 2: ["underpass", "flood_history"],
                                              3: ["underpass", "flood_history", "riverside"]}
     legacy = parse_config(data).rain_levels.avoid_by_level
-    assert legacy[2].hard == ("underpass", "flood_history") and legacy[2].soft == ()
+    assert legacy[2].hard_groups == ("underpass", *FLOOD_GROUPS) and legacy[2].soft_groups == ()
+
+
+def test_group_helpers_expand_types_and_default_unknown_tiers():
+    assert config_module.expand_groups(["riverside", "flood_history"]) == (*FLOOD_GROUPS, "riverside")
+    assert config_module.expand_groups(["flood_history.raised", "underpass"]) == ("underpass", "flood_history.raised")
+    assert config_module.zone_group("flood_history", "raised") == "flood_history.raised"
+    assert config_module.zone_group("flood_history", None) == "flood_history.high"   # most cautious
+    assert config_module.zone_group("flood_history", "bogus") == "flood_history.high"
+    assert config_module.zone_group("underpass", "high") == "underpass"               # no tiers
+    labels = get_config().group_labels()
+    assert labels["flood_history.raised"] == "침수 이력(주변보다 높은 편)" and labels["underpass"] == "지하차도"
+    assert get_config().penalty_scales() == {"underpass": 1.0, "flood_history.high": 1.5,
+                                             "flood_history.normal": 1.0, "flood_history.raised": 0.5,
+                                             "riverside": 1.0}
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d["rain_levels"]["avoid_by_level"].__setitem__(1, {"hard": ["flood_history.low"], "soft": []}),
+    # the type name covers every tier, so this overlaps
+    lambda d: d["rain_levels"]["avoid_by_level"].__setitem__(
+        2, {"hard": ["underpass", "flood_history"], "soft": ["flood_history.raised"]}),
+    # level 2 must keep level 1's hard and soft groups
+    lambda d: d["rain_levels"]["avoid_by_level"].__setitem__(2, {"hard": ["underpass"], "soft": []}),
+    lambda d: d["zone_types"]["flood_history"]["tiers"].pop("raised"),
+    lambda d: d["zone_types"]["underpass"].__setitem__("tiers", {"high": {"label": "x"}}),
+    lambda d: d["zone_types"]["flood_history"]["tiers"]["high"].__setitem__("penalty_scale", -1),
+])
+def test_invalid_tier_config_is_rejected(mutate):
+    data = yaml.safe_load(config_module.CONFIG_PATH.read_text(encoding="utf-8"))
+    mutate(data)
+    with pytest.raises(ConfigError, match="strategies.yaml"):
+        parse_config(data)
+
+
+def test_zone_ids_and_avoid_polygons_accept_group_keys():
+    high = make_zone("z-high", "flood_history", square(126.86, LAT, 50), tier="high")
+    layer = corridor_layer(extra=[high])  # corridor flood zone is "normal"
+    exposure = score_route([ORIGIN, DESTINATION], layer, WEIGHTS)
+    assert exposure.zone_ids(["flood_history.high"]) == {"z-high"}
+    assert exposure.zone_ids(["flood_history"]) == {"z-high", "z-flood_history"}
+    buffers = {"underpass": 30, "flood_history": 20, "riverside": 50}
+    assert [p.zone.id for p in layer.avoid_polygons(["flood_history.normal"], buffers)] == ["z-flood_history"]

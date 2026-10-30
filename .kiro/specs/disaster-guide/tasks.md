@@ -61,3 +61,13 @@
   - [x] 13.5 API·app-config(`hard_by_level`, `soft_by_level`), 프론트(일부 회피 주의 상자, 단계 문구)
   - [x] 13.6 테스트: hard 거르기, soft 비용 비교와 일부 회피, 벌점 덮어쓰기, 중간 회차 후보 보존, 출발·목적지를 덮는 soft 구역, 설정 검사, 기존 테스트 갱신
   - [x] 13.7 실제 타일로 시나리오 A·D 확인, 브라우저 확인, 전체 pytest(192개)·build·lint
+- [x] 14. 침수 이력 지형 등급 (설계 5.8)
+  - [x] 14.1 원본 교체(`sources/gwangju_flood_zones.geojson` ← DEM 자료), `readers.py` 고도 속성 전달, `zones.py` 등급 계산, `pipeline.yaml` `flood_tiers`, 검증에 등급·고도 속성
+  - [x] 14.2 `config`: `ZONE_TIERS`, 그룹 키, `tiers`(라벨·벌점 배율), 단계별 규칙의 그룹 펼치기·검사. `strategies.yaml` 갱신
+  - [x] 14.3 `risk/layer.py`(등급·고도·그룹, 그룹 키로 거르기), `risk/scoring.py`
+  - [x] 14.4 `strategies/params.py`·`base.py`: 그룹 단위 hard/soft, 등급 배율 벌점, explanation `hard_groups`·`soft_groups`·`avoid_groups`, 문구
+  - [x] 14.5 API(`app-config` `zone_groups`), 경로 설명 `회피_등급`
+  - [x] 14.6 프론트: 그룹 강조, 범례, 단계 문구, 팝업(등급·고도·참고 문구)
+  - [x] 14.7 테스트: 등급 계산, 그룹 설정 검사, 단계별 등급 회피, 배율 벌점, 등급 없는 구역 기본값, 기존 테스트 갱신
+  - [x] 14.8 데이터 다시 생성(구역 도형·기존 속성 변화 없음 확인), 실제 타일 비교(설계 5.8 표), 브라우저 확인, 전체 pytest(287개)·build·lint
+  - [ ] 14.9 (사용자 확인 대기) requirements.md 4.5 표·시연 기준 수정, 기준값 20 → 15 여부

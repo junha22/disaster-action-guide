@@ -106,8 +106,9 @@ def resolve(config: AppConfig, model: type[BaseModel], overrides: dict[str, Any]
     levels = config.rain_levels.avoid_by_level
     return ResolvedParams(
         avoid_buffer_m=buffers, weights=weights, thresholds_mm=tuple(thresholds), alert_min_level=alert,
-        avoid_by_level={k: v.all for k, v in levels.items()},
-        hard_by_level={k: tuple(v.hard) for k, v in levels.items()},
-        soft_by_level={k: tuple(v.soft) for k, v in levels.items()},
-        entry_penalty_s=entry, per_m_penalty_s=per_m,
-        labels={t: config.zone_types[t].label for t in ZONE_TYPES}, lambda_=float(lambda_))
+        avoid_by_level={k: v.all_groups for k, v in levels.items()},
+        hard_by_level={k: v.hard_groups for k, v in levels.items()},
+        soft_by_level={k: v.soft_groups for k, v in levels.items()},
+        entry_penalty_s=entry, per_m_penalty_s=per_m, penalty_scale=config.penalty_scales(),
+        labels={t: config.zone_types[t].label for t in ZONE_TYPES}, group_labels=config.group_labels(),
+        lambda_=float(lambda_))

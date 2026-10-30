@@ -5,7 +5,7 @@ from typing import Any, ClassVar, Iterable, Protocol, Sequence
 
 from pydantic import BaseModel
 
-from ..config import ZONE_TYPES
+from ..config import ZONE_TYPES, expand_groups, groups_of, types_of
 from ..engines.base import (ExcludeLimitExceeded, LocationNotRoutable, LonLat, NoRouteFound,
                             OsrmRoute, RoutingEngine)
 from ..risk.layer import AvoidPolygon, RiskLayer
@@ -44,12 +44,15 @@ class ResolvedParams:
     weights: dict[str, float]
     thresholds_mm: tuple[float, ...]
     alert_min_level: dict[str, int]
+    # Avoidance groups (config.ZONE_GROUPS: "underpass", "flood_history.high", ...), design.md 5.8.
     avoid_by_level: dict[int, tuple[str, ...]]  # hard + soft, for display
     hard_by_level: dict[int, tuple[str, ...]]
     soft_by_level: dict[int, tuple[str, ...]]
-    entry_penalty_s: dict[str, float]
-    per_m_penalty_s: dict[str, float]
-    labels: dict[str, str]
+    entry_penalty_s: dict[str, float]  # by type
+    per_m_penalty_s: dict[str, float]  # by type
+    penalty_scale: dict[str, float]    # by group, multiplies the type penalties
+    labels: dict[str, str]             # by type
+    group_labels: dict[str, str]       # by group
     lambda_: float
 
 
@@ -83,7 +86,7 @@ class Explanation:
     # baseline | no_avoid_level | nothing_on_route | avoided | partially_avoided | avoid_failed | ranked
     status: str
     level: int
-    avoid_types: tuple[str, ...]
+    avoid_types: tuple[str, ...]  # types with at least one avoided group (map highlight, older clients)
     avoided_zones: list[dict]
     passed_zones: list[dict]
     added_duration_s: float
@@ -91,14 +94,16 @@ class Explanation:
     message: str
     warning: str | None = None
     failure_reason: str | None = None
-    hard_types: tuple[str, ...] = ()
-    soft_types: tuple[str, ...] = ()
-    clear_option: dict[str, float] | None = None  # fastest candidate avoiding every avoided type
+    avoid_groups: tuple[str, ...] = ()  # hard + soft groups (design.md 5.8)
+    hard_groups: tuple[str, ...] = ()
+    soft_groups: tuple[str, ...] = ()
+    clear_option: dict[str, float] | None = None  # fastest candidate avoiding every avoided group
     baseline_passed_zones: list[dict] = field(default_factory=list)  # input for the AI explanation
 
     def as_dict(self) -> dict[str, Any]:
         return {"status": self.status, "level": self.level, "avoid_types": list(self.avoid_types),
-                "hard_types": list(self.hard_types), "soft_types": list(self.soft_types),
+                "avoid_groups": list(self.avoid_groups),
+                "hard_groups": list(self.hard_groups), "soft_groups": list(self.soft_groups),
                 "avoided_zones": self.avoided_zones, "passed_zones": self.passed_zones,
                 "baseline_passed_zones": self.baseline_passed_zones,
                 "added_duration_s": self.added_duration_s, "added_distance_m": self.added_distance_m,
@@ -160,11 +165,6 @@ MIN_ROUND_TIME_S = 1.0
 ALTERNATES_MIN_TIME_S = 3.0
 
 
-def ordered_types(types: Iterable[str]) -> tuple[str, ...]:
-    wanted = set(types)
-    return tuple(t for t in ZONE_TYPES if t in wanted)
-
-
 def scored(ctx: StrategyContext, route: OsrmRoute, label: str) -> ScoredRoute:
     exposure = score_route(route["geometry"]["coordinates"], ctx.layer, ctx.params.weights)
     return ScoredRoute(osrm=route, exposure=exposure, label=label)
@@ -185,29 +185,45 @@ def baseline_routes(ctx: StrategyContext, request: RouteRequest, alternates: int
 
 
 def make_plan(ctx: StrategyContext, *, route: ScoredRoute, baseline: ScoredRoute, status: str,
-              alternatives: Sequence[ScoredRoute] = (), avoid_types: Sequence[str] = (),
+              alternatives: Sequence[ScoredRoute] = (), avoid_groups: Sequence[str] = (),
               message: str | None = None, warning: str | None = None,
-              failure_reason: str | None = None, hard_types: Sequence[str] = (),
-              soft_types: Sequence[str] = (), clear_option: dict[str, float] | None = None) -> RoutePlan:
-    # Zones the baseline passes but the chosen route does not. Restricted to the avoided types
+              failure_reason: str | None = None, hard_groups: Sequence[str] = (),
+              soft_groups: Sequence[str] = (), clear_option: dict[str, float] | None = None) -> RoutePlan:
+    """Groups may be given as type names too; they are expanded (config.expand_groups)."""
+    avoid_groups, hard_groups, soft_groups = (expand_groups(g) for g in (avoid_groups, hard_groups, soft_groups))
+    # Zones the baseline passes but the chosen route does not. Restricted to the avoided groups
     # when there are any, so the list explains the choice instead of listing side effects.
-    scope = avoid_types or None
+    scope = set(avoid_groups) or None
     route_ids = route.exposure.zone_ids()
     avoided = [p.zone.ref() for p in baseline.exposure.passes
-               if p.zone.id not in route_ids and (scope is None or p.zone.type in scope)]
+               if p.zone.id not in route_ids and (scope is None or p.zone.group in scope)]
     explanation = Explanation(
-        status=status, level=ctx.weather.level, avoid_types=ordered_types(avoid_types),
+        status=status, level=ctx.weather.level, avoid_types=types_of(avoid_groups),
         avoided_zones=avoided, passed_zones=[p.as_dict() for p in route.exposure.passes],
         baseline_passed_zones=[p.as_dict() for p in baseline.exposure.passes],
         added_duration_s=round(route.osrm["duration"] - baseline.osrm["duration"], 1),
         added_distance_m=round(route.osrm["distance"] - baseline.osrm["distance"], 1),
         message=message or MESSAGES.get(status, ""), warning=warning, failure_reason=failure_reason,
-        hard_types=ordered_types(hard_types), soft_types=ordered_types(soft_types), clear_option=clear_option)
+        avoid_groups=avoid_groups, hard_groups=hard_groups, soft_groups=soft_groups, clear_option=clear_option)
     return RoutePlan(route=route, baseline=baseline, alternatives=tuple(alternatives), explanation=explanation)
 
 
-def type_phrase(ctx: StrategyContext, types: Sequence[str]) -> str:
-    return "·".join(ctx.params.labels[t] for t in types)
+def _label_units(ctx: StrategyContext, groups: Iterable[str]) -> list[tuple[str, set[str]]]:
+    """(label, groups) for display: a whole type when all its tiers are present, else each group."""
+    chosen = set(groups)
+    units: list[tuple[str, set[str]]] = []
+    for zone_type in ZONE_TYPES:
+        mine = [g for g in groups_of(zone_type) if g in chosen]
+        if len(mine) == len(groups_of(zone_type)):
+            units.append((ctx.params.labels[zone_type], set(mine)))
+        else:
+            units.extend((ctx.params.group_labels[g], {g}) for g in mine)
+    return units
+
+
+def group_phrase(ctx: StrategyContext, groups: Iterable[str]) -> str:
+    """"지하차도·침수 이력(우선 회피)"."""
+    return "·".join(label for label, _ in _label_units(ctx, groups))
 
 
 @dataclass(frozen=True)
@@ -223,8 +239,8 @@ def collect_candidates(ctx: StrategyContext, request: RouteRequest, types: Seque
     route the engine returns along the way (design.md 5.7).
 
     Real data has hundreds of zones; sending all of them at once exceeds the engine's
-    exclude_polygons limits (risk_zones_guide.md 6-3). Each round adds the `types` zones the
-    round's best route still passes. Earlier rounds and engine alternatives often contain better
+    exclude_polygons limits (risk_zones_guide.md 6-3). Each round adds the `types` zones (type
+    names or avoidance groups) the round's best route still passes. Earlier rounds and engine alternatives often contain better
     routes than the last round, so nothing is thrown away here; the caller chooses.
     EngineUnavailable (timeout, no tiles) propagates.
     """
@@ -281,39 +297,43 @@ def collect_candidates(ctx: StrategyContext, request: RouteRequest, types: Seque
 
 
 def soft_penalty(ctx: StrategyContext, route: ScoredRoute, soft: Sequence[str]) -> float:
-    """Detour seconds charged for passing 'soft' zones (entry penalty + per-metre penalty)."""
+    """Detour seconds charged for passing 'soft' groups:
+    (entry penalty + per-metre penalty of the type) x penalty scale of the group (design.md 5.8)."""
     p = ctx.params
-    return sum(p.entry_penalty_s[z.zone.type] + p.per_m_penalty_s[z.zone.type] * z.length_m
-               for z in route.exposure.passes if z.zone.type in soft)
+    wanted = set(soft)
+    return sum((p.entry_penalty_s[z.zone.type] + p.per_m_penalty_s[z.zone.type] * z.length_m)
+               * p.penalty_scale[z.zone.group]
+               for z in route.exposure.passes if z.zone.group in wanted)
 
 
 def _partial_message(ctx: StrategyContext, route: ScoredRoute, hard: Sequence[str],
                      soft: Sequence[str]) -> str:
     parts = []
-    for t in soft:
-        passes = [z for z in route.exposure.passes if z.zone.type == t]
+    for label, members in _label_units(ctx, soft):
+        passes = [z for z in route.exposure.passes if z.zone.group in members]
         if passes:
-            parts.append(f"{ctx.params.labels[t]} 구역 {len(passes)}곳({round(sum(z.length_m for z in passes))}m)")
+            parts.append(f"{label} 구역 {len(passes)}곳({round(sum(z.length_m for z in passes))}m)")
     tail = ", ".join(parts) + "은 지납니다."
-    return (f"{type_phrase(ctx, hard)} 구역은 모두 피했고, " + tail) if hard else tail
+    return (f"{group_phrase(ctx, hard)} 구역은 모두 피했고, " + tail) if hard else tail
 
 
 def avoid_plan(ctx: StrategyContext, request: RouteRequest, hard: Iterable[str], soft: Iterable[str] = (),
                empty_status: str = "no_avoid_level") -> RoutePlan:
     """Never pass `hard` zones; pass `soft` zones only when the detour costs more than their penalty.
 
+    `hard` and `soft` are avoidance groups or type names (all tiers of the type, design.md 5.8).
     Falls back to the baseline with a warning when no candidate avoids every hard zone
     (requirement 4.9). Candidates come from collect_candidates (design.md 5.7).
     """
-    hard = ordered_types(hard)
-    soft = ordered_types(t for t in soft if t not in hard)
-    types = ordered_types((*hard, *soft))
+    hard = expand_groups(hard)
+    soft = tuple(g for g in expand_groups(soft) if g not in hard)
+    groups = expand_groups((*hard, *soft))
     base_routes = baseline_routes(ctx, request, alternates=2)
     baseline = base_routes[0]
-    common = {"avoid_types": types, "hard_types": hard, "soft_types": soft}
-    if not types:
+    common = {"avoid_groups": groups, "hard_groups": hard, "soft_groups": soft}
+    if not groups:
         return make_plan(ctx, route=baseline, baseline=baseline, status=empty_status)
-    if not baseline.exposure.zone_ids(types):
+    if not baseline.exposure.zone_ids(groups):
         return make_plan(ctx, route=baseline, baseline=baseline, status="nothing_on_route", **common)
 
     def failed(reason: str) -> RoutePlan:
@@ -332,7 +352,7 @@ def avoid_plan(ctx: StrategyContext, request: RouteRequest, hard: Iterable[str],
     blocked = {z.id for point in (request.origin, request.destination)
                for z in ctx.layer.containing(point, soft_polygons)}
     polygons = hard_polygons + [p for p in soft_polygons if p.zone.id not in blocked]
-    search = collect_candidates(ctx, request, types, polygons, baseline.exposure.zone_ids(types),
+    search = collect_candidates(ctx, request, groups, polygons, baseline.exposure.zone_ids(groups),
                                 seed=base_routes)
     valid = [r for r in search.routes if not r.exposure.zone_ids(hard)]
     if not valid:
@@ -343,11 +363,11 @@ def avoid_plan(ctx: StrategyContext, request: RouteRequest, hard: Iterable[str],
     ranked = sorted(valid, key=lambda r: r.osrm["duration"] + soft_penalty(ctx, r, soft))  # stable
     chosen = ranked[0]
     alternatives = ranked[1:1 + MAX_ALTERNATIVES]
-    phrase = type_phrase(ctx, types)
+    phrase = group_phrase(ctx, groups)
     if not chosen.exposure.zone_ids(soft):
         return make_plan(ctx, route=chosen, baseline=baseline, status="avoided", alternatives=alternatives,
                          message=f"{phrase} 구역을 피한 경로입니다.", **common)
-    clear = sorted((r for r in valid if not r.exposure.zone_ids(types)), key=lambda r: r.osrm["duration"])
+    clear = sorted((r for r in valid if not r.exposure.zone_ids(groups)), key=lambda r: r.osrm["duration"])
     clear_option = None
     if clear:
         clear_option = {"added_duration_s": round(clear[0].osrm["duration"] - chosen.osrm["duration"], 1),

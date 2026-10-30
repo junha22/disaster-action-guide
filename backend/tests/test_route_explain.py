@@ -84,8 +84,11 @@ def test_bedrock_explains_once_and_reuses_the_cache(client):
     facts = json.loads(call["messages"][0]["content"][0]["text"])
     assert facts["모드"] == "호우경보" and facts["추가_소요시간_분"] == 5 and facts["대체_계산"] is False
     assert facts["비교"]["위험_구간_수"] == 3 and facts["추천"]["위험_구간"] == []
+    # flood zones carry their terrain tier (design.md 5.8); other types do not
     assert facts["비교"]["위험_구간"][0] == {"종류": "침수 이력", "이름": "z-flood_history", "근거": "test",
-                                         "길이_m": 210}
+                                         "길이_m": 210, "회피_등급": "일반"}
+    assert all("회피_등급" not in z for z in facts["비교"]["위험_구간"] if z["종류"] != "침수 이력")
+    assert "회피_등급" in call["system"][0]["text"]
     assert "126." not in json.dumps(facts) and "35.1" not in json.dumps(facts)  # no coordinates
 
 
@@ -107,6 +110,8 @@ def test_guardrail_config_and_grounding_qualifiers(client):
     ("추천 경로는 침수되지 않는 길이에요.", "filtered"),
     ("지금 침수된 구간을 피했어요.", "filtered"),
     ("추천 경로로 운전하세요.", "filtered"),
+    ("주변보다 높은 편이라 덜 위험한 구간이에요.", "filtered"),
+    ("이 침수 이력 구간은 지나도 괜찮아요.", "filtered"),
     ("추천 경로는 7분 더 걸려요.", "number_mismatch"),
     ("", "empty"),
     ("가. " * 6, "too_long"),

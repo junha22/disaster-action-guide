@@ -56,6 +56,39 @@ def test_real_flood_history_zones_are_included():
     assert all(z.id.startswith("FLD-") for z in real)
 
 
+def test_real_flood_zones_have_terrain_tiers():
+    """design.md 5.8: tiers come from data_pipeline (pipeline.yaml flood_tiers)."""
+    layer = RiskLayer.from_geojson(DATA)
+    real = [z for z in layer.active(["flood_history"]) if not z.is_dummy]
+    counts = {t: sum(z.tier == t for z in real) for t in ("high", "normal", "raised")}
+    assert counts == {"high": 182, "normal": 360, "raised": 115}
+    assert all(z.tier_reason for z in real)
+    assert all(z.group == f"flood_history.{z.tier}" for z in real)
+    # zones without elevation are never put in a lower tier
+    assert all(z.tier == "high" for z in real if (z.terrain or {}).get("elev_status") != "정상")
+    for zone in layer.active(["underpass", "riverside"]):
+        assert zone.tier is None and zone.group == zone.type
+        assert zone.properties()["risk_tier"] is None and "low_pct" not in zone.properties()
+
+
+def first_flood(data):
+    return next(f for f in data["features"] if f["properties"]["type"] == "flood_history")
+
+
+@pytest.mark.parametrize("mutate, expected", [
+    (lambda p: p.__setitem__("risk_tier", "bogus"), "risk_tier must be one of"),
+    (lambda p: p.__setitem__("type", "underpass"), "risk_tier must be one of []"),
+    (lambda p: p.__setitem__("low_pct", 150), "low_pct must be between"),
+    (lambda p: p.__setitem__("elev_m", "high"), "elev_m must be a number"),
+    (lambda p: p.__setitem__("flood_count", 0), "flood_count must be a positive integer"),
+    (lambda p: p.__setitem__("elev_status", "unknown"), "elev_status must be one of"),
+])
+def test_validator_rejects_bad_terrain_properties(mutate, expected):
+    data = copy.deepcopy(DATA)
+    mutate(first_flood(data)["properties"])
+    assert any(expected in e for e in validate_zone_collection(data))
+
+
 def bowtie(feature):
     feature["geometry"] = {"type": "Polygon", "coordinates": [[[126.85, 35.15], [126.86, 35.16], [126.86, 35.15],
                                                                [126.85, 35.16], [126.85, 35.15]]]}

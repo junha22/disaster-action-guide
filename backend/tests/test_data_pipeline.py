@@ -87,3 +87,53 @@ def test_valid_records_are_written(tmp_path):
 
 def test_committed_risk_zones_match_the_pipeline():
     assert build_risk_zones.main(["--check"]) == 0
+
+
+# ---- flood_history terrain tiers (design.md 5.8) ---------------------------------------------
+
+TIERS = {"repeat_count": 2, "high_below_low_pct": 20, "raised_from_low_pct": 50}
+SQUARE = {"type": "Polygon", "coordinates": [[[126.85, 35.15], [126.851, 35.15], [126.851, 35.151],
+                                              [126.85, 35.151], [126.85, 35.15]]]}
+
+
+@pytest.mark.parametrize("terrain, tier, reason", [
+    ({"flood_count": 2, "low_pct": 60, "elev_status": "정상"}, "high", "2회 침수"),
+    ({"flood_count": 1, "low_pct": 19.9, "elev_status": "정상"}, "high", "주변보다 낮은 땅"),
+    ({"flood_count": 2, "low_pct": 5, "elev_status": "정상"}, "high", "2회 침수·주변보다 낮은 땅"),
+    ({"flood_count": 1, "low_pct": None, "elev_status": "범위 밖"}, "high", "고도 자료 없음"),
+    ({"flood_count": 1, "low_pct": 70, "elev_status": "일부 범위 밖"}, "high", "고도 자료 일부 없음"),
+    ({}, "high", "고도 자료 없음"),
+    ({"flood_count": 1, "low_pct": 20, "elev_status": "정상"}, "normal", "주변과 비슷한 높이"),
+    ({"flood_count": 1, "low_pct": 49.9, "elev_status": "정상"}, "normal", "주변과 비슷한 높이"),
+    ({"flood_count": 1, "low_pct": 50, "elev_status": "정상"}, "raised", "주변보다 높은 편"),
+])
+def test_flood_tier_from_repeat_count_and_relative_elevation(terrain, tier, reason):
+    assert zones.flood_tier(terrain, TIERS) == (tier, reason)
+
+
+def test_only_flood_records_get_terrain_and_tier():
+    flood = record(id="f", type="flood_history", geometry=SQUARE, flood_count=1, elev_m=30.0, low_pct=55.0,
+                   above_local_min_m=6.0, elev_status="정상")
+    data = zones.build_collection([flood, record(id="u")], RADIUS, TIERS)
+    props = {f["properties"]["id"]: f["properties"] for f in data["features"]}
+    assert props["f"]["risk_tier"] == "raised" and props["f"]["tier_reason"] == "주변보다 높은 편"
+    assert (props["f"]["low_pct"], props["f"]["elev_m"], props["f"]["flood_count"]) == (55.0, 30.0, 1)
+    assert "risk_tier" not in props["u"] and "low_pct" not in props["u"]
+    zones.check(data)
+    with pytest.raises(zones.PipelineError, match="flood_tiers"):
+        zones.build_collection([flood], RADIUS)
+
+
+def test_flood_reader_passes_elevation_through(tmp_path):
+    from readers import read_flood_zone_geojson
+
+    source = tmp_path / "flood.geojson"
+    source.write_text(json.dumps({"type": "FeatureCollection", "features": [{
+        "type": "Feature", "geometry": SQUARE,
+        "properties": {"id": "FLD-T-1", "name": "t", "type": "침수 이력", "active": True, "source_name": "s",
+                       "source_url": "https://www.data.go.kr/a", "verified_date": "2026-10-30",
+                       "flood_count": 2, "elev_m": 31.5, "elev_min_m": 30.0, "low_pct": 12.0,
+                       "above_local_min_m": 1.0, "elev_status": "정상"}}]}), encoding="utf-8")
+    [rec] = read_flood_zone_geojson(source)
+    assert rec["type"] == "flood_history" and rec["flood_count"] == 2 and rec["low_pct"] == 12.0
+    assert "elev_min_m" not in rec  # only the keys the app uses

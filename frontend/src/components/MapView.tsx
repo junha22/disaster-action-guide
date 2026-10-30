@@ -5,7 +5,7 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import '@/lib/mapWorker'
 
 import RiskLayer from '@/components/RiskLayer'
-import type { AppConfig, LineGeometry, LonLat, Place, ZoneFeatureCollection, ZoneType } from '@/lib/types'
+import type { AppConfig, LineGeometry, LonLat, Place, ZoneFeatureCollection, ZoneGroup } from '@/lib/types'
 
 // OpenFreeMap: no API key. The default attribution control stays on (requirement 6.1).
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/fiord'
@@ -22,8 +22,8 @@ const CARD_SPACE_PX = 390
 
 interface Props {
   zones: ZoneFeatureCollection | null
-  zoneTypes: AppConfig['zone_types'] | null
-  highlightTypes: ZoneType[]
+  config: Pick<AppConfig, 'zone_types' | 'zone_groups'> | null
+  highlightGroups: ZoneGroup[]
   passedZoneIds: string[]
   // True when a result card covers the left side of the map.
   floatingCard: boolean
@@ -48,7 +48,7 @@ function setLines(map: MapLibreMap, id: string, lines: LineGeometry[]) {
 }
 
 export default function MapView(props: Props) {
-  const { zones, zoneTypes, highlightTypes, passedZoneIds, floatingCard, route, baseline, alternatives, showBaseline,
+  const { zones, config, highlightGroups, passedZoneIds, floatingCard, route, baseline, alternatives, showBaseline,
     origin, destination } = props
   const container = useRef<HTMLDivElement>(null)
   const [map, setMap] = useState<MapLibreMap | null>(null)
@@ -119,9 +119,9 @@ export default function MapView(props: Props) {
   return (
     <div className="relative h-full w-full">
       <div ref={container} className="h-full w-full" aria-label="경로 지도" role="region" />
-      {map && zoneTypes && (
-        <RiskLayer map={map} zones={zones} zoneTypes={zoneTypes} highlightTypes={highlightTypes}
-          passedZoneIds={passedZoneIds} />
+      {map && config && (
+        <RiskLayer map={map} zones={zones} zoneTypes={config.zone_types} zoneGroups={config.zone_groups}
+          highlightGroups={highlightGroups} passedZoneIds={passedZoneIds} />
       )}
     </div>
   )

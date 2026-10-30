@@ -4,9 +4,21 @@ version: 1
 
 # entry_penalty_s / per_m_penalty_s: detour time (seconds) worth spending to avoid one zone of this
 # type, used only at levels where the type is "soft" (되도록 피함). See design.md 5.7.
+# tiers (flood_history only, design.md 5.8): terrain tiers written by data_pipeline as risk_tier.
+# penalty_scale multiplies the type's soft penalty for zones of that tier.
 zone_types:
   underpass:     {label: 지하차도,  weight: 3, avoid_buffer_m: 30, color: "#dc2626", entry_penalty_s: 600, per_m_penalty_s: 2}
-  flood_history: {label: 침수 이력, weight: 2, avoid_buffer_m: 20, color: "#ea580c", entry_penalty_s: 120, per_m_penalty_s: 1}
+  flood_history:
+    label: 침수 이력
+    weight: 2
+    avoid_buffer_m: 20
+    color: "#ea580c"
+    entry_penalty_s: 120
+    per_m_penalty_s: 1
+    tiers:
+      high:   {label: 우선 회피,        penalty_scale: 1.5}  # 2회 침수, 주변보다 낮은 땅, 고도 자료 없음
+      normal: {label: 일반,             penalty_scale: 1.0}
+      raised: {label: 주변보다 높은 편, penalty_scale: 0.5}
   riverside:     {label: 하천변,    weight: 1, avoid_buffer_m: 50, color: "#2563eb", entry_penalty_s: 60,  per_m_penalty_s: 0.5}
 
 rain_levels:
@@ -14,10 +26,11 @@ rain_levels:
   thresholds_mm: [30, 50, 70]
   # hard: routes through these zones are never chosen (반드시 피함).
   # soft: allowed but penalized, so a detour is chosen when it costs less (되도록 피함).
+  # A type name means every tier of it; "flood_history.high" is one tier.
   avoid_by_level:
     0: {hard: [], soft: []}
-    1: {hard: [underpass], soft: []}
-    2: {hard: [underpass], soft: [flood_history]}
+    1: {hard: [underpass], soft: [flood_history.high]}
+    2: {hard: [underpass, flood_history.high], soft: [flood_history.normal, flood_history.raised]}
     3: {hard: [underpass, flood_history, riverside], soft: []}
 
 # Heavy-rain alerts raise the level to at least this value.

@@ -27,7 +27,7 @@ def build(config_path: Path) -> tuple[str, Path]:
         if reader is None:
             raise PipelineError(f"unknown reader: {source['reader']}")
         records.extend(reader(base / source["path"]))
-    collection = build_collection(records, config["default_radius_m"])
+    collection = build_collection(records, config["default_radius_m"], config.get("flood_tiers"))
     check(collection)
     return dumps(collection), (base / config["output"]).resolve()
 

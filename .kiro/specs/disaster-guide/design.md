@@ -105,6 +105,8 @@ FeatureCollection이다. geometry는 Polygon 또는 MultiPolygon이며, 버퍼�
 | `checked_at` | 확인일 `YYYY-MM-DD`. 더미는 작성일 `2026-10-30` |
 | `is_dummy` | 더미 여부. 화면에 "더미 데이터" 배지를 붙인다 |
 | `note` | 위치를 정한 근거 |
+| `flood_count`, `elev_m`, `low_pct`, `above_local_min_m`, `elev_status` | 침수 이력만. 원본의 침수 횟수와 DEM 고도 속성(가이드 3-3). 고도가 없으면 `null` |
+| `risk_tier`, `tier_reason` | 침수 이력만. 지형 등급(`high`/`normal`/`raised`)과 그 이유(5.8) |
 
 ### 4.2 data_pipeline (요구사항 3.2)
 
@@ -224,7 +226,7 @@ baseline 자체를 찾지 못하면 422 "두 지점 사이 자동차 경로를 �
 
 - 피한 구역 = baseline이 지나지만 선택 경로는 지나지 않는 구역
 - 지나는 구역 = 선택 경로가 지나는 구역과 그 길이
-- explanation에 `hard_types`, `soft_types`(단계별 반드시·되도록 피함 유형), `clear_option`(모두 피하는 가장 빠른 후보의 `{added_duration_s, added_distance_m}` 또는 `null`)을 더한다. `avoid_types`는 두 목록을 합친 것이다(화면 강조·기존 호환).
+- explanation에 `hard_groups`, `soft_groups`(단계별 반드시·되도록 피함 그룹, 5.8), `avoid_groups`(두 목록의 합), `clear_option`(모두 피하는 가장 빠른 후보의 `{added_duration_s, added_distance_m}` 또는 `null`)을 더한다. `avoid_types`는 그룹이 하나라도 걸린 유형이다(기존 호환).
 
 ### 5.6 파라미터 (요구사항 4.7)
 
@@ -291,6 +293,55 @@ strategies:
 | 55mm | 1298초, 22.8km | 928초, 14.4km, 침수 구역 2곳(75m) 지남 → 일부 회피 |
 | 75mm | 1298초, 22.8km | 1268초, 20.9km, 모두 회피 |
 
+### 5.8 침수 이력 지형 등급 (고도 반영)
+
+침수 이력 구역에 국토지리정보원 DEM(90m 격자) 고도 속성을 붙인 자료(`risk_zones_guide(DEM).md`)를 쓴다. 해발고도(`elev_m`)는 피해를 구분하지 못해(가이드 검증 AUC 0.48) 쓰지 않는다. 침수 횟수(`flood_count`)를 주 기준, 주변보다 낮은 정도(`low_pct`, AUC 0.62)를 보조 기준으로 쓴다. 지하차도·하천변은 등급을 두지 않는다.
+
+**등급**: `data_pipeline/pipeline.yaml`의 `flood_tiers` 기준으로 파이프라인이 계산해 `risk_tier`, `tier_reason`으로 쓴다. 서버는 읽기만 한다.
+
+| 등급 (키) | 조건 | 구역 수 |
+| --- | --- | --- |
+| 우선 회피 (`high`) | `flood_count` ≥ 2, 또는 `low_pct` < 20, 또는 `elev_status`가 `정상`이 아님(고도 없음 16, 일부 범위 밖 11) | 182 |
+| 일반 (`normal`) | 나머지 중 `low_pct` < 50 | 360 |
+| 주변보다 높은 편 (`raised`) | 1회 침수이고 `low_pct` ≥ 50 | 115 |
+
+- 등급이 없거나 모르는 값인 침수 이력 구역(예전 자료, 손으로 넣은 구역)은 우선 회피로 본다.
+- 회피 규칙의 단위는 **그룹**이다. 지하차도·하천변은 유형 이름 그대로(`underpass`, `riverside`), 침수 이력은 등급별(`flood_history.high`, `flood_history.normal`, `flood_history.raised`)이다. `strategies.yaml`에 유형 이름(`flood_history`)을 쓰면 그 유형의 모든 등급이다. 등급 목록은 `config.ZONE_TIERS`에 고정하고, yaml의 `zone_types.flood_history.tiers`가 같은 키를 가져야 한다.
+
+**단계별 규칙** (`strategies.yaml`, 지하차도·하천변은 5.6 그대로):
+
+| 침수 이력 등급 | 1단계 (30mm) | 2단계 (50mm) | 3단계 (70mm) |
+| --- | --- | --- | --- |
+| 우선 회피 | 되도록 피함 | 반드시 피함 | 반드시 피함 |
+| 일반 | 피하지 않음 | 되도록 피함 | 반드시 피함 |
+| 주변보다 높은 편 | 피하지 않음 | 되도록 피함 | 반드시 피함 |
+
+- 벌점 = 유형 벌점(5.6) × 등급 배율. 배율(초안)은 우선 회피 1.5, 일반 1.0, 주변보다 높은 편 0.5다.
+- 위험 노출 점수(5.3)는 바꾸지 않는다.
+- 표현: 등급이 낮아도 "통과 가능", "안전"으로 쓰지 않는다. 팝업에 "고도(90m 격자)는 참고용이며, 침수 기록이 있는 곳입니다"를 붙인다.
+- API
+  - `GET /api/risk-zones` 속성에 `group`, `risk_tier`, `tier_reason`, `flood_count`, `elev_m`, `low_pct`, `above_local_min_m`, `elev_status`를 더한다(침수 이력만 값이 있다).
+  - `GET /api/app-config`에 `zone_groups`(그룹별 `type`, `tier`, `label`)를 더하고, `level_rules`의 `avoid_by_level`·`hard_by_level`·`soft_by_level`은 그룹 키 목록으로 바꾼다.
+  - explanation의 `hard_types`·`soft_types`는 `hard_groups`·`soft_groups`로 바꾸고 `avoid_groups`를 더한다. `avoid_types`는 그룹이 하나라도 걸린 유형이다(기존 호환).
+- 화면: 지도는 현재 단계에서 피하는 그룹만 진하게 그린다. 범례는 유형 일부만 피하면 "일부 회피 대상"이라고 쓴다. 강수 단계 문구와 팝업에 등급을 보여준다.
+- 경로 설명(18절): 사실 JSON의 침수 이력 구역에 `회피_등급`을 더한다. 등급이 낮다고 지나도 된다고 쓰지 않도록 규칙을 한 줄 더한다.
+- 한계: DEM 격자(90m)가 구역(중앙값 지름 약 60m)보다 거칠다. 기준값 20·50과 배율은 검증된 값이 아니다(가이드 6-7). 시나리오 A의 55mm 경로가 지나던 FLD-BUK-0453은 `low_pct` 19.6이라 기준 바로 아래에서 우선 회피가 된다.
+
+시뮬레이션(실제 Valhalla, tiered_rain, `.local-data/sim_routes.py`·`sim_threshold.py`). 15/50은 메모리에서만 다시 분류한 비교값이다.
+
+| 구간 | 강수량 | 등급 전 | 등급 20/50 (현재) | 등급 15/50 (비교) |
+| --- | --- | --- | --- | --- |
+| A 광주송정역 → 광주역 | 0mm | 931초 | 931초 | 931초 |
+| | 35mm | 946초, 지하차도만 회피 | 912초, 회피 | 882초, 회피 |
+| | 55mm | 928초, 일부 회피(0453·0479) | 1268초, 모두 회피 | 928초, 일부 회피 |
+| | 75mm | 1268초 | 1268초 | 1268초 |
+| E 챔피언스필드 → 광주역 | 0mm | 232초 | 232초 | 232초 |
+| | 35mm | 232초, 지날 구역 없음 | 387초, 우선 회피 구역 피함 | 332초 |
+| | 55mm | 433초, 일부 회피 | 433초, 일부 회피(주변보다 높은 편 1곳) | 433초 |
+| | 75mm | 회피 실패 | 회피 실패 | 회피 실패 |
+
+20/50에서는 시나리오 A의 55mm와 75mm가 같은 경로가 된다(`check_demo_scenario.py`가 `SCENARIO_A_SOME_STEPS_EQUAL`을 낸다).
+
 ## 6. 경로 엔진 어댑터 (요구사항 5)
 
 ### 6.1 인터페이스 (`engines/base.py`)
@@ -351,7 +402,7 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 
 | 메서드·경로 | 내용 |
 | --- | --- |
-| `GET /api/app-config` | `{search_mode, service_area_bbox, zone_types(label·color), level_rules(thresholds_mm, avoid_by_level, alert_min_level), default_strategy, engine}` |
+| `GET /api/app-config` | `{search_mode, service_area_bbox, zone_types(label·color), zone_groups(type·tier·label), level_rules(thresholds_mm, avoid_by_level·hard_by_level·soft_by_level(그룹 키), alert_min_level), default_strategy}` |
 | `GET /api/strategies` | `[{name, label, description, default, params}]` |
 | `GET /api/risk-zones` | GeoJSON FeatureCollection + `metadata: {has_dummy, data_checked_at}` |
 | `GET /api/demo-points` | 데모 지점 목록 |
@@ -447,8 +498,8 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
   - `MapView.tsx`: 선택 경로(보라), baseline 점선(회색, 켜고 끄기), 대안(연보라), 출발·도착 표시, 경로 범위 맞춤, 지도 출처 표기 유지. maplibre 번들이 커서 `React.lazy`로 따로 불러온다.
     - maplibre 6은 자기 모듈 옆에서 워커 파일을 찾는데, Vite 개발 서버의 의존성 사전 번들링이 모듈 위치를 바꿔 "Worker failed to load"가 난다. `maplibre-gl-worker.mjs?url`로 받은 주소를 `setWorkerUrl()`로 넘긴다.
   - `RiskLayer.tsx`
-    - 유형별 색과 범례(지도 왼쪽 위. 아래쪽은 모바일에서 출처 표기와 겹친다). 피하는 유형은 진하게, 나머지는 흐리게 그린다. 결과가 있으면 그 결과의 `avoid_types`를 쓰고, 없으면 현재 단계로 정한다.
-    - 구역 클릭 팝업(이름, 유형, 출처, 확인일, 더미 배지)
+    - 유형별 색과 범례(지도 왼쪽 위. 아래쪽은 모바일에서 출처 표기와 겹친다). 피하는 그룹(5.8)은 진하게, 나머지는 흐리게 그린다. 결과가 있으면 그 결과의 `avoid_groups`를 쓰고, 없으면 현재 단계로 정한다. 유형의 일부 등급만 피하면 범례에 "일부 회피 대상"이라고 쓴다.
+    - 구역 클릭 팝업(이름, 유형, 회피 등급과 이유, 침수 연도 수, 고도, 출처, 확인일, 더미 배지, 고도 참고 문구)
   - `lib/api.ts`, `lib/types.ts`, `lib/level.ts`(`app-config`의 규칙으로 화면에서 단계 계산)
 - **UI 컴포넌트**: 기존 shadcn/ui(button, card, badge, input, label)와 lucide를 재사용한다. 슬라이더와 스위치는 이미 의존성에 있는 `radix-ui`로 shadcn 형식의 `components/ui/slider.tsx`, `switch.tsx`를 추가한다. 새 npm 패키지는 없다.
 - **다시 계산**(요구사항 6.6): 결과가 있을 때 슬라이더를 놓거나(`onValueCommit`) 특보를 바꿔 단계가 결과의 단계와 달라지면 1회 다시 계산한다. 단계가 같으면 다시 계산하지 않는다. 새 결과가 오면 이전 결과를 지운다(요구사항 6.8).
@@ -563,6 +614,7 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 3. 실제 엔진으로 시나리오 A를 확인하는 일은 pytest가 아니라 수동 스크립트로 한다(요구사항 5.7).
 4. 특보 현재 상태는 특보코드조회의 마지막 명령으로 판정한다(3.3절). 광주서부·광주동부 중 하나라도 발효면 광주 발효로 본다. 기상청 조회 기준은 광주 대표 1곳이다('팀 확정 필요'의 초안).
 5. 중대경보는 경보와 같게 반영한다.
+6. 침수 이력 지형 등급(5.8)은 요구사항 4.5 표와 시연 확인 기준(35mm·55mm)과 다르다. 5.8 규칙이 우선한다. requirements.md는 사용자 확인 후 고친다.
 
 ## 18. AI 회피 경로 설명 (요구사항 8)
 

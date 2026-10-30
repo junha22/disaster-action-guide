@@ -64,8 +64,9 @@ def test_every_strategy_answers_in_the_same_format(setup, name):
     assert data["route"]["geometry"]["type"] == "LineString" and "duration" in data["route"]
 
 
+# avoid_types lists types with at least one avoided group; level 1 avoids only high flood zones.
 @pytest.mark.parametrize("rn1, status, types", [
-    (0, "no_avoid_level", []), (35, "avoided", ["underpass"]),
+    (0, "no_avoid_level", []), (35, "avoided", ["underpass", "flood_history"]),
     (55, "avoided", ["underpass", "flood_history"]), (75, "avoided", ["underpass", "flood_history", "riverside"]),
 ])
 def test_demo_override_drives_the_level(setup, rn1, status, types):
@@ -147,12 +148,21 @@ def test_metadata_endpoints(setup):
     assert strategies[0]["name"] == "tiered_rain" and strategies[0]["default"]
     zones = client.get("/api/risk-zones").json()
     assert zones["type"] == "FeatureCollection" and zones["metadata"]["has_dummy"]
+    props = {f["properties"]["id"]: f["properties"] for f in zones["features"]}
+    assert props["z-flood_history"]["group"] == "flood_history.normal"
+    assert props["z-flood_history"]["risk_tier"] == "normal" and "low_pct" in props["z-flood_history"]
+    assert props["z-underpass"]["group"] == "underpass" and props["z-underpass"]["risk_tier"] is None
     config = client.get("/api/app-config").json()
     assert config["level_rules"]["thresholds_mm"] == [30, 50, 70]
-    assert config["level_rules"]["avoid_by_level"]["1"] == ["underpass"]
-    assert config["level_rules"]["avoid_by_level"]["2"] == ["underpass", "flood_history"]
-    assert config["level_rules"]["hard_by_level"]["2"] == ["underpass"]
-    assert config["level_rules"]["soft_by_level"]["2"] == ["flood_history"]
+    assert config["level_rules"]["avoid_by_level"]["1"] == ["underpass", "flood_history.high"]
+    assert config["level_rules"]["hard_by_level"]["2"] == ["underpass", "flood_history.high"]
+    assert config["level_rules"]["soft_by_level"]["2"] == ["flood_history.normal", "flood_history.raised"]
+    assert config["level_rules"]["avoid_by_level"]["3"] == ["underpass", "flood_history.high", "flood_history.normal",
+                                                            "flood_history.raised", "riverside"]
+    assert config["zone_groups"]["flood_history.raised"] == {"type": "flood_history", "tier": "raised",
+                                                             "label": "침수 이력(주변보다 높은 편)",
+                                                             "tier_label": "주변보다 높은 편"}
+    assert config["zone_groups"]["underpass"]["tier"] is None
     assert len(client.get("/api/demo-points").json()) == 7
     assert client.get("/api/health").json()["status"] == "ok"
 

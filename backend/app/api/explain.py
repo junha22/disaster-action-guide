@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..config import ZONE_TYPES, AppConfig
+from ..config import ZONE_GROUPS, ZONE_TYPES, AppConfig, group_tier, group_type
 from ..risk.layer import RiskLayer
 from ..route_explainer import ExplainInput, UnknownZone, ZoneLength, explain
 from .deps import config_dep, layer_dep
@@ -54,7 +54,9 @@ def explain_route(body: ExplainBody,
                         route_zones=_zones(body.route), baseline_zones=_zones(body.baseline),
                         fallback_engine=body.fallback_engine)
     labels = {t: config.zone_types[t].label for t in ZONE_TYPES}
+    tier_labels = {g: config.zone_types[group_type(g)].tiers[group_tier(g)].label
+                   for g in ZONE_GROUPS if group_tier(g)}
     try:
-        return explain(data, {z.id: z for z in layer.zones}, labels).as_dict()
+        return explain(data, {z.id: z for z in layer.zones}, labels, tier_labels).as_dict()
     except UnknownZone:
         raise HTTPException(422, UNKNOWN_ZONE) from None

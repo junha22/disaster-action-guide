@@ -664,6 +664,12 @@ body {
   text-decoration: underline;
 }
 
+.risk-popup-note {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #4b5563;
+}
+
 .risk-popup-dummy {
   margin-top: 4px;
   font-weight: 600;

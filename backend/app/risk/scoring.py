@@ -32,8 +32,10 @@ class Exposure:
     passes: tuple[ZonePass, ...]
 
     def zone_ids(self, types: Iterable[str] | None = None) -> set[str]:
+        """Ids of passed zones. `types` may mix type names and group keys ("flood_history.high")."""
         wanted = None if types is None else set(types)
-        return {p.zone.id for p in self.passes if wanted is None or p.zone.type in wanted}
+        return {p.zone.id for p in self.passes
+                if wanted is None or p.zone.type in wanted or p.zone.group in wanted}
 
 
 def score_route(coordinates: Sequence[Sequence[float]], layer: RiskLayer,

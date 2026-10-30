@@ -59,8 +59,8 @@ def test_every_strategy_returns_the_same_osrm_plan_shape(name):
     for route in [data["route"], data["baseline"], *data["alternatives"]]:
         assert route["geometry"]["type"] == "LineString"
         assert {"distance", "duration", "weight", "weight_name", "legs"} <= set(route)
-    assert set(data["explanation"]) == {"status", "level", "avoid_types", "hard_types", "soft_types",
-                                        "avoided_zones", "passed_zones", "baseline_passed_zones",
+    assert set(data["explanation"]) == {"status", "level", "avoid_types", "avoid_groups", "hard_groups",
+                                        "soft_groups", "avoided_zones", "passed_zones", "baseline_passed_zones",
                                         "added_duration_s", "added_distance_m", "message", "warning",
                                         "failure_reason", "clear_option"}
     assert set(data["metrics"]) == {"route", "baseline", "alternatives"}
@@ -69,16 +69,24 @@ def test_every_strategy_returns_the_same_osrm_plan_shape(name):
     assert shape_of(data["metrics"]["route"]) == shape_of(reference.to_dict()["metrics"]["route"])
 
 
-@pytest.mark.parametrize("rn1, level, avoided, route_label", [
-    (0, 0, [], "straight"), (29, 0, [], "straight"),
-    (30, 1, ["underpass"], "avoid-u"), (49, 1, ["underpass"], "avoid-u"),
-    (50, 2, ["underpass", "flood_history"], "avoid-uf"), (69, 2, ["underpass", "flood_history"], "avoid-uf"),
-    (70, 3, ["underpass", "flood_history", "riverside"], "avoid-all"),
+ALL_FLOOD = ["flood_history.high", "flood_history.normal", "flood_history.raised"]
+
+
+# The corridor flood zone is "normal": level 1 avoids only "high" flood zones (design.md 5.8).
+@pytest.mark.parametrize("rn1, level, groups, avoided, route_label", [
+    (0, 0, [], [], "straight"), (29, 0, [], [], "straight"),
+    (30, 1, ["underpass", "flood_history.high"], ["underpass"], "avoid-u"),
+    (49, 1, ["underpass", "flood_history.high"], ["underpass"], "avoid-u"),
+    (50, 2, ["underpass", *ALL_FLOOD], ["underpass", "flood_history"], "avoid-uf"),
+    (69, 2, ["underpass", *ALL_FLOOD], ["underpass", "flood_history"], "avoid-uf"),
+    (70, 3, ["underpass", *ALL_FLOOD, "riverside"], ["underpass", "flood_history", "riverside"], "avoid-all"),
 ])
-def test_tiered_rain_boundaries(rn1, level, avoided, route_label):
+def test_tiered_rain_boundaries(rn1, level, groups, avoided, route_label):
     plan, fake = run("tiered_rain", rn1=rn1)
     e = plan.explanation
-    assert e.level == level and list(e.avoid_types) == avoided
+    assert e.level == level and list(e.avoid_groups) == groups
+    assert list(e.avoid_types) == sorted({g.split(".")[0] for g in groups}, key=["underpass", "flood_history",
+                                                                                  "riverside"].index)
     assert label_of(plan) == route_label
     if level == 0:
         assert e.status == "no_avoid_level" and e.message.startswith("현재 강수 단계에서는 피하는 구역이 없습니다")
@@ -202,8 +210,8 @@ def test_running_out_of_time_is_reported_as_a_timeout():
 
 
 def test_short_budget_still_returns_a_partial_route_when_one_exists():
-    # 55 mm: flood zones are soft, so a candidate that only passes flood zones is usable.
-    second = make_zone("second", "flood_history", square(126.86, LAT + 0.005, 100))
+    # 55 mm: normal flood zones are soft, so a candidate that only passes them is usable.
+    second = make_zone("second", "flood_history", square(126.86, LAT + 0.005, 100), tier="normal")
     plan, _ = _slow_plan(55, [second])
     assert plan.explanation.status in ("partially_avoided", "avoided")
     assert not plan.route.exposure.zone_ids(["underpass"])
@@ -274,10 +282,13 @@ SLOW_CLEAR = [  # avoiding every flood zone costs a long detour
 def test_level_rules_split_hard_and_soft():
     plan, _ = run("tiered_rain", rn1=55)
     e = plan.explanation
-    assert (e.hard_types, e.soft_types) == (("underpass",), ("flood_history",))
+    assert (e.hard_groups, e.soft_groups) == (("underpass", "flood_history.high"),
+                                              ("flood_history.normal", "flood_history.raised"))
     assert e.avoid_types == ("underpass", "flood_history")
+    plan, _ = run("tiered_rain", rn1=35)
+    assert (plan.explanation.hard_groups, plan.explanation.soft_groups) == (("underpass",), ("flood_history.high",))
     plan, _ = run("tiered_rain", rn1=75)
-    assert plan.explanation.hard_types == ("underpass", "flood_history", "riverside")
+    assert plan.explanation.hard_groups == ("underpass", *ALL_FLOOD, "riverside")
 
 
 def test_soft_zone_is_passed_when_the_detour_costs_more_than_its_penalty():
@@ -285,7 +296,7 @@ def test_soft_zone_is_passed_when_the_detour_costs_more_than_its_penalty():
     e = plan.explanation
     assert label_of(plan) == "avoid-u"  # underpass avoided, flood zone passed (cheaper than +1300 s)
     assert e.status == "partially_avoided" and e.warning == "일부 위험 구역을 지나는 경로입니다."
-    assert e.message.startswith("지하차도 구역은 모두 피했고, 침수 이력 구역 1곳(")
+    assert e.message.startswith("지하차도·침수 이력(우선 회피) 구역은 모두 피했고, 침수 이력(일반) 구역 1곳(")
     assert {z["id"] for z in e.passed_zones} >= {"z-flood_history"}
     assert [z["id"] for z in e.avoided_zones] == ["z-underpass"]
     # fastest candidate avoiding both types is avoid-uf (2000 s)
@@ -343,3 +354,57 @@ def test_soft_zone_covering_the_destination_is_not_excluded():
 def test_invalid_penalty_overrides_are_rejected(name, params):
     with pytest.raises(ParamsError):
         run(name, params=params)
+
+
+# ---- flood_history terrain tiers (design.md 5.8) ---------------------------------------------
+
+# Avoiding the flood zone costs +250 s over avoid-u. Passing it (~200 m) costs
+# (120 + 1 x 200) x scale: high 480 s, normal 320 s, raised 160 s.
+TIER_DETOUR = [
+    {"label": "straight", "coords": CANDIDATES[0]["coords"], "duration": 600.0},
+    {"label": "avoid-u", "coords": CANDIDATES[1]["coords"], "duration": 700.0},
+    {"label": "avoid-uf", "coords": CANDIDATES[2]["coords"], "duration": 950.0},
+    {"label": "avoid-all", "coords": CANDIDATES[3]["coords"], "duration": 1050.0},
+]
+
+
+@pytest.mark.parametrize("rn1, tier, expected, status", [
+    (35, "high", "avoid-uf", "avoided"),       # soft at level 1, 480 s > 250 s detour
+    (35, None, "avoid-uf", "avoided"),         # unknown tier is treated as high
+    (35, "normal", "avoid-u", "avoided"),      # not avoided at level 1
+    (35, "raised", "avoid-u", "avoided"),
+    (55, "normal", "avoid-uf", "avoided"),     # soft, 320 s > 250 s
+    (55, "raised", "avoid-u", "partially_avoided"),  # soft, 160 s < 250 s: passed
+    (75, "raised", "avoid-all", "avoided"),    # level 3: every tier is hard
+])
+def test_flood_tier_decides_how_strongly_a_zone_is_avoided(rn1, tier, expected, status):
+    plan, _ = run("tiered_rain", rn1=rn1, fake=engine(TIER_DETOUR), layer=corridor_layer(flood_tier=tier))
+    assert label_of(plan) == expected and plan.explanation.status == status
+
+
+def test_high_tier_is_hard_at_level_2_even_when_much_slower():
+    rows = [*TIER_DETOUR[:2], {**TIER_DETOUR[2], "duration": 5000.0}, {**TIER_DETOUR[3], "duration": 5100.0}]
+    plan, _ = run("tiered_rain", rn1=55, fake=engine(rows), layer=corridor_layer(flood_tier="high"))
+    assert label_of(plan) == "avoid-uf" and plan.explanation.status == "avoided"
+    assert plan.explanation.message == "지하차도·침수 이력 구역을 피한 경로입니다."
+
+
+def test_partial_message_names_the_tier_that_is_passed():
+    plan, _ = run("tiered_rain", rn1=55, fake=engine(TIER_DETOUR), layer=corridor_layer(flood_tier="raised"))
+    e = plan.explanation
+    assert e.message.startswith("지하차도·침수 이력(우선 회피) 구역은 모두 피했고, 침수 이력(주변보다 높은 편) 구역 1곳(")
+    assert e.clear_option["added_duration_s"] == 250.0
+    assert [z["id"] for z in e.avoided_zones] == ["z-underpass"]
+
+
+def test_penalty_scale_multiplies_the_type_penalty():
+    from app.strategies.base import soft_penalty
+
+    plan, _ = run("tiered_rain", rn1=55, fake=engine(TIER_DETOUR), layer=corridor_layer(flood_tier="raised"))
+    resolved = resolve(get_config(), registry.get_strategy("tiered_rain").params_model, None)
+    ctx = StrategyContext(weather=demo_weather(55, "none", resolved), layer=corridor_layer(flood_tier="raised"),
+                          engine=engine(), params=resolved, deadline=time.monotonic() + 10)
+    passed = next(z for z in plan.route.exposure.passes if z.zone.id == "z-flood_history")
+    expected = (120 + 1 * passed.length_m) * 0.5
+    assert soft_penalty(ctx, plan.route, ["flood_history.raised"]) == pytest.approx(expected)
+    assert soft_penalty(ctx, plan.route, ["flood_history.normal"]) == 0  # other tiers are not charged
