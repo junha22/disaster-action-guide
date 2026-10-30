@@ -9,6 +9,7 @@ import pytest
 scratch = tempfile.TemporaryDirectory(prefix="kirothon-r2-tests-")
 os.environ["KIROTHON_DB_PATH"] = str(Path(scratch.name) / "records.sqlite3")
 os.environ["KIROTHON_AI_MODE"] = "mock"
+os.environ["KIROTHON_ENV_FILE"] = ""  # never read a developer's backend/.env during tests
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.database import engine

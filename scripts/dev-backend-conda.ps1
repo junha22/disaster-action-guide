@@ -3,15 +3,23 @@ param(
     [string]$CondaEnv = 'disaster-action-guide'
 )
 # Local API in the conda env (replaces dev-backend.ps1 for this project).
-# Mock AI, local DB under .local-data/. Optional keys come from <project>/.env (git-ignored, see
-# .env.example) or from this window's environment, which takes precedence over the file.
+# Mock AI, local DB under .local-data/. Optional keys come from (first one wins):
+#   1. this window's environment ($env:KAKAO_REST_API_KEY = '...')
+#   2. <project>/.env, passed to uvicorn with --env-file (see .env.example)
+#   3. backend/.env, read by app/__init__.py (see backend/.env.example)
+# Both .env files are git-ignored and never deployed. KIROTHON_AI_MODE=mock set below always wins.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $envFile = Join-Path $root '.env'
+$backendEnvFile = Join-Path $root 'backend\.env'
 
 function Get-KeyStatus([string]$name, [string]$missing) {
     if (Test-Path -LiteralPath "env:$name") { return 'set' }
-    if ((Test-Path -LiteralPath $envFile) -and (Select-String -LiteralPath $envFile -Pattern "^\s*$name=\S" -Quiet)) { return 'set (.env)' }
+    foreach ($file in @($envFile, $backendEnvFile)) {
+        if ((Test-Path -LiteralPath $file) -and (Select-String -LiteralPath $file -Pattern "^\s*$name=\S" -Quiet)) {
+            return "set ($(Split-Path -Leaf (Split-Path -Parent $file))/.env)"
+        }
+    }
     return $missing
 }
 

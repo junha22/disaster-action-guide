@@ -14,7 +14,7 @@
 | 경로 엔진 | pyvalhalla 3.9.1 `valhalla.Actor`, 백엔드 프로세스 안에서 계산, Docker 없음 |
 | 지도 | maplibre-gl 6.16.0 + OpenFreeMap `liberty` 스타일, 출처 표기 유지 |
 | 지오메트리 | shapely 2.2.0, 미터 계산은 pyproj 3.8.0으로 EPSG:5179 변환 |
-| AI | 사용하지 않음. 공통 AI 코드(ai_service.py, routers/ai.py)와 Record CRUD는 그대로 둠 |
+| AI | 회피 경로 설명만(18절). 공통 AI 코드(ai_service.py, routers/ai.py)와 Record CRUD는 그대로 둠 |
 | 기록 저장 | 사용하지 않음. 좌표·검색어·경로를 DB·파일·로그에 남기지 않음 |
 
 ## 2. 전체 구조
@@ -358,6 +358,7 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 | `GET /api/weather` | 3절 기상 컨텍스트 |
 | `POST /api/search` | `{query}` → 장소 목록 |
 | `POST /api/route` | 경로 계획 |
+| `POST /api/route/explain` | 경로 설명 문장(18절) |
 
 ### `GET /api/weather`
 ```json
@@ -462,8 +463,8 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 - 좌표·검색어·경로는 요청 처리 중 메모리에만 있다. DB·파일·로그에 쓰지 않는다.
 - uvicorn 접근 로그에는 메서드와 경로만 찍힌다. 본문은 찍히지 않는다.
 - 예외 처리기와 오류 문구에 요청 본문, 카카오·기상청 원문 오류, 키를 넣지 않는다.
-- Record DB와 AI 호출량 DB는 건드리지 않는다.
-- 밖으로 나가는 정보는 카카오에 검색어·범위, 기상청에 격자(58, 74)·특보 조회 조건뿐이다. 브라우저는 OpenFreeMap에 지도 타일을 요청한다(요구사항 7.5).
+- Record DB는 건드리지 않는다. AI 호출량 DB는 경로 설명이 실제 Bedrock을 부를 때만 1회 센다(캐시 적중·모의 모드는 세지 않음).
+- 밖으로 나가는 정보는 카카오에 검색어·범위, 기상청에 격자(58, 74)·특보 조회 조건, Bedrock에 경로 설명용 사실(좌표 없음, 18절)뿐이다. 브라우저는 OpenFreeMap에 지도 타일을 요청한다(요구사항 7.5).
 
 ## 11. 환경변수
 
@@ -473,8 +474,20 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 | `KMA_SERVICE_KEY` | 초단기실황·특보 | 데모 모드 |
 | `VALHALLA_CONFIG` | Valhalla 설정 경로 | `.local-data/valhalla/valhalla.json` |
 | `ROUTING_TIMEOUT_S` | 경로 요청 시간 제한 | 10 |
+| `KIROTHON_AI_MODE` | `mock` / `bedrock` | `bedrock` (로컬 스크립트는 `mock`) |
+| `KIROTHON_BEDROCK_REGION` | Bedrock 호출 리전 | `ap-northeast-1` |
+| `KIROTHON_EXPLAIN_MODEL` | 경로 설명 모델(ai_service.py 허용 목록 안) | Claude Haiku 4.5 |
+| `KIROTHON_EXPLAIN_TIMEOUT_S` | 경로 설명 응답 대기(1~30초) | 8 |
+| `KIROTHON_BEDROCK_GUARDRAIL_ID`, `_VERSION` | Bedrock Guardrails | 없음: 서버 자체 검사만 |
+| `KIROTHON_ENV_FILE` | 읽을 .env 경로. 빈 값이면 읽지 않음(테스트) | `backend/.env` |
 
-키는 로컬에서는 프로젝트 루트의 `.env`(Git 제외, `.env.example` 참고)나 실행하는 PowerShell 창의 `$env:KAKAO_REST_API_KEY = '...'`로 넣는다. 창의 값이 우선한다. 저장소·배포물·프론트에 넣지 않는다.
+- 키와 설정을 넣는 곳은 세 곳이고, 위에 있는 것이 우선한다.
+  1. 프로세스 환경: PowerShell `$env:`, systemd
+  2. 프로젝트 루트의 `.env`: `.env.example` 참고. `scripts/dev-backend-conda.ps1`이 uvicorn `--env-file`로 넘긴다.
+  3. `backend/.env`: `backend/.env.example` 참고. `app/__init__.py`가 앱을 불러올 때 python-dotenv(잠금 파일에 이미 있음)로 읽는다. 서버에서는 이 파일을 쓴다.
+- 이미 프로세스 환경에 있는 값은 .env로 바뀌지 않는다. 그래서 로컬 스크립트의 `KIROTHON_AI_MODE=mock`은 그대로 유지된다.
+- 두 `.env`는 Git(.gitignore)과 배포물(scripts/deploy.ps1, ops/deploy.py)에서 빠진다. 서버에서는 `/home/ubuntu/kirothon/backend/.env`에 한 번 만들고 권한을 600으로 둔다. 배포는 이 파일을 건드리지 않는다.
+- AWS 액세스 키는 어느 .env에도 넣지 않는다. 서버는 EC2 IAM 역할을 쓴다. 키를 저장소·배포물·프론트에 넣지 않는다.
 
 `KMA_SERVICE_KEY`는 공공데이터포털 키와 기상청 API허브 키를 모두 받는다. API허브 키(22자)면 `apihub.kma.go.kr`의 `authKey`로, 그 외에는 `apis.data.go.kr`의 `serviceKey`로 호출한다. 특보는 API허브에서 `wrn_now_data.php`(발효 중인 특보 목록)를 쓴다. 등급은 `주의`·`경보`만 인정하고 `예비`는 뺀다. 광주는 `REG_ID`나 `REG_UP`의 광주 코드로 찾고, 경기 광주시(`L1013400`)는 제외한다. 실황은 매시 정각 자료를 먼저 요청하고, 아직 없으면 이전 시각 자료를 쓴다.
 
@@ -550,3 +563,21 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 3. 실제 엔진으로 시나리오 A를 확인하는 일은 pytest가 아니라 수동 스크립트로 한다(요구사항 5.7).
 4. 특보 현재 상태는 특보코드조회의 마지막 명령으로 판정한다(3.3절). 광주서부·광주동부 중 하나라도 발효면 광주 발효로 본다. 기상청 조회 기준은 광주 대표 1곳이다('팀 확정 필요'의 초안).
 5. 중대경보는 경보와 같게 반영한다.
+
+## 18. AI 회피 경로 설명 (요구사항 8)
+
+- 흐름: 화면이 `POST /api/route` 결과를 먼저 그린 뒤 `POST /api/route/explain`을 따로 부른다(`frontend/src/components/RouteExplanation.tsx`). 설명은 경로 결과 카드 바로 아래에 붙는다. 설명 요청이 실패하면 설명 칸만 숨긴다.
+- 요청 본문: `{status, level, alert, route: {duration_s, zones: [{id, length_m}]}, baseline: {...}, fallback_engine}`. 좌표는 없다. `explanation.baseline_passed_zones`(baseline이 지나는 구역)를 추가해 일반 경로 쪽 구간을 채운다.
+- `app/route_explainer.py`:
+  - `build_facts()`: 구역 ID를 서버 위험 구역 데이터로 풀어 이름·유형·근거를 붙인다. 모르는 ID는 422다. 목록은 길이 순 5개까지, 수는 전체를 센다. 소요시간은 분으로 반올림하고 추가 소요시간은 두 값의 차다.
+  - 근거: 실제 침수 이력 구역은 이름의 연도로 "2023·2025년 침수피해 기록", 나머지는 원본 자료 이름.
+  - 고정 문구 상태(baseline, no_avoid_level, nothing_on_route)와 baseline과 같은 rerank 결과는 LLM을 부르지 않는다.
+  - Bedrock Converse: system에 규칙, user에 사실 JSON과 질문. `maxTokens 300`, `temperature 0.2`, 연결 3초, 응답 `KIROTHON_EXPLAIN_TIMEOUT_S`, 재시도 없음.
+  - 가드레일 ID가 있으면 `guardrailConfig`를 넣고, 사실 JSON은 `grounding_source`, 질문은 `query` 한정자를 붙인 `guardContent`로 보낸다(근거 확인). 단어 필터는 Bedrock 콘솔의 가드레일에서 설정한다. `stopReason: guardrail_intervened`면 템플릿이다.
+  - 서버 검사(`check_output`): 400자 또는 4문장 초과, '안전'·'보장'·'침수되지 않'·'위험이 없'·'지금 침수'·운전/출발 권유·다른 경로 이용 권유·링크, 사실 JSON에 없는 숫자가 있으면 템플릿이다.
+  - 템플릿 대체 사유: `not_needed`, `mock`, `config`, `quota`, `timeout`, `throttled`, `error`, `guardrail`, `filtered`, `number_mismatch`, `too_long`, `empty`. 로그에는 사유만 남기고 사실은 남기지 않는다.
+  - 캐시: 프로세스 메모리 256개, 6시간. 키는 모델·가드레일·사실 JSON의 SHA-256이다. 같은 출발·도착과 같은 위험 구간 조합이면 사실이 같으므로 좌표 없이 재사용된다. AI 성공 문장만 캐시한다.
+  - 호출량: 실제 Bedrock 호출 전에만 공통 한도(분당 20회, 하루 600회)를 센다.
+- 응답: `{text, source: "ai" | "template", reason, cached}`. 화면은 `source`에 따라 "AI 설명" / "경로 설명"을 표시한다.
+- 대체 계산: OpenRouteService 같은 대체 엔진은 아직 없다. `fallback_engine`은 항상 false이고, 나중에 대체 엔진을 붙이면 이 값을 채운다.
+- 테스트: `backend/tests/test_route_explain.py`. boto3를 가짜로 바꿔 실제 AWS 없이 돈다.

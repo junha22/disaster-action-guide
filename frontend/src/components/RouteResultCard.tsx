@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import RouteExplanation from '@/components/RouteExplanation'
 import { formatDistance, formatDuration, signed } from '@/lib/format'
 import type { AppConfig, RouteResult, ZoneType } from '@/lib/types'
 
@@ -128,6 +129,8 @@ export default function RouteResultCard({ config, result, showBaseline, onShowBa
           <dd>{formatDistance(result.metrics.route.distance_m)}</dd>
         </div>
       </dl>
+
+      <RouteExplanation result={result} />
 
       <Button type="button" className="w-full" size="lg" disabled={starting} onClick={onStartDrive}>
         {starting ? <Loader2 className="animate-spin" /> : <Navigation />}

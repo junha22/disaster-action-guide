@@ -98,6 +98,7 @@ export interface Explanation {
   clear_option: { added_duration_s: number; added_distance_m: number } | null
   avoided_zones: ZoneRef[]
   passed_zones: PassedZone[]
+  baseline_passed_zones: PassedZone[]
   added_duration_s: number
   added_distance_m: number
   message: string
@@ -131,6 +132,27 @@ export interface RouteResult {
   explanation: Explanation
   metrics: { route: RouteMetrics; baseline: RouteMetrics; alternatives: RouteMetrics[] }
   weather: RouteWeather
+}
+
+// POST /api/route/explain: finished facts only, no coordinates (requirement 8).
+export interface ExplainSide {
+  duration_s: number
+  zones: { id: string; length_m: number }[]
+}
+
+export interface RouteExplainBody {
+  status: PlanStatus
+  level: number
+  alert: Alert
+  route: ExplainSide
+  baseline: ExplainSide
+}
+
+export interface RouteExplainResult {
+  text: string
+  source: 'ai' | 'template'
+  reason: string | null
+  cached: boolean
 }
 
 export interface RouteRequestBody {
