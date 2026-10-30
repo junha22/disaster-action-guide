@@ -53,9 +53,12 @@ def _resolve(raw: str) -> Path:
 
 
 def build_request(origin: LonLat, destination: LonLat, exclude_polygons: Sequence[Ring],
-                  alternates: int) -> dict[str, Any]:
+                  alternates: int, heading: float | None = None) -> dict[str, Any]:
+    start: dict[str, Any] = {"lon": origin[0], "lat": origin[1]}
+    if heading is not None:
+        start["heading"] = round(heading % 360)  # keeps a mid-drive route from starting with a U-turn
     request: dict[str, Any] = {
-        "locations": [{"lon": origin[0], "lat": origin[1]}, {"lon": destination[0], "lat": destination[1]}],
+        "locations": [start, {"lon": destination[0], "lat": destination[1]}],
         "costing": "auto",
         "format": "osrm",
         "shape_format": "geojson",
@@ -225,11 +228,11 @@ class ValhallaEngine:
         return parse_guidance(response)
 
     def route(self, origin: LonLat, destination: LonLat, *, exclude_polygons: Sequence[Ring] = (),
-              alternates: int = 0, timeout_s: float = 10.0) -> list[OsrmRoute]:
+              alternates: int = 0, timeout_s: float = 10.0, heading: float | None = None) -> list[OsrmRoute]:
         if timeout_s <= 0:
             raise EngineUnavailable()
         self._load_config()
-        request = build_request(origin, destination, exclude_polygons, alternates)
+        request = build_request(origin, destination, exclude_polygons, alternates, heading)
         future = self._executor.submit(self._call, request)
         try:
             response = future.result(timeout=timeout_s)

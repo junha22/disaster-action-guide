@@ -692,3 +692,15 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 - 응답: `{text, source: "ai" | "template", reason, cached}`. 화면은 `source`에 따라 "AI 설명" / "경로 설명"을 표시한다.
 - 대체 계산: OpenRouteService 같은 대체 엔진은 아직 없다. `fallback_engine`은 항상 false이고, 나중에 대체 엔진을 붙이면 이 값을 채운다.
 - 테스트: `backend/tests/test_route_explain.py`. boto3를 가짜로 바꿔 실제 AWS 없이 돈다.
+
+## 19. 운행 중 경로 변경 요청 (요구사항 9)
+
+- 흐름: 강수 단계 상승 → `POST /api/route/reroute` → (`recommend`이면) 회전 안내 받기, 카드 표시 → `POST /api/route/reroute/explain` → 운전자 선택.
+- 판단: `backend/app/reroute.py`. `decide()`는 선택한 알고리즘의 경로와 남은 경로를 새 단계의 hard/soft 그룹으로 비교한다. soft만 줄어드는 경우는 알고리즘과 같은 기준(소요시간 + soft 벌점)으로 고른다.
+- 회피 실패: 차가 구역 사이나 구역 안에 있으면 전부 피하는 길이 없을 수 있다. 일반 경로로 돌아가면 55mm에서 3곳을 지나는 지점이 75mm에서 8곳을 지나는 모순이 생기므로, `best_effort_plan()`이 공통 후보(5.7)에서 hard 구간이 가장 적은 경로를 고른다. 같으면 소요시간 + soft 벌점이 작은 쪽이다.
+- 출발 방향: `RouteRequest.origin_heading` → 엔진 `heading` → Valhalla 출발 지점의 `heading`. 달리는 방향을 무시하고 경로가 시작되는 것을 줄인다.
+- 남은 시간: 화면의 남은 시간과 같은 값(전체 소요시간 × 남은 거리 비율)을 클라이언트가 보낸다. 구간 수는 서버가 남은 경로 좌표로 직접 계산한다. 좌표는 저장하거나 기록하지 않는다.
+- 설명: `route_explainer.reroute_facts`, `reroute_template`, `explain_reroute`. 요구사항 8과 같은 호출·검사·캐시 경로(`_write`)를 쓰고, 프롬프트만 따로 둔다. 추가 소요시간은 반올림한 분끼리 빼지 않고 초 차이에서 구해 화면의 값과 어긋나지 않게 한다.
+- 화면: `DriveMode`는 경로를 `Nav` 묶음 하나로 들고 `navRef`로 지도 루프에 넘긴다. 경로가 바뀌어도 지도를 다시 만들지 않고 선 데이터만 바꾼다. 지나온 길은 `travelledRef`로 이어 그린다. 요청 중에는 카메라를 위에서 본 전체 화면으로 옮기고 현재 경로는 호박색, 변경 경로는 청록색으로 그린다.
+- 음성: `frontend/src/lib/speech.ts`. 새 라이브러리 없이 `speechSynthesis`를 쓴다. 긴 문장에서 끊기는 브라우저가 있어 문장마다 나눠 읽고, "75mm", "1곳"은 읽기 좋게 바꾼다. 재탐색 알림과 변경 이유만 읽으며 회전 안내는 읽지 않는다.
+- 테스트: `backend/tests/test_reroute.py`. 실제 엔진 확인은 광주송정역 → 광주역의 13개 지점 × 35·55·75mm(39건, 공통 후보와 지하차도 22곳 적용 후): `recommend` 20, `no_better` 6, `keep` 13. 기본 경로가 35mm 회피 경로와 같아져 35mm는 모두 `keep`이고, 75mm는 전체 경로의 32%·40% 지점에서만 `no_better`다.

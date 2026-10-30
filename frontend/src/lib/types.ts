@@ -166,6 +166,59 @@ export interface RouteExplainResult {
   cached: boolean
 }
 
+export interface RainState {
+  rn1_mm: number
+  alert: Alert
+}
+
+export type RerouteAction = 'recommend' | 'keep' | 'no_better'
+
+// POST /api/route/reroute: the rain got worse during a drive.
+export interface RerouteRequestBody {
+  position: { lon: number; lat: number }
+  destination: { lon: number; lat: number }
+  heading: number
+  remaining: LonLat[]
+  remaining_duration_s: number
+  previous: RainState
+  strategy: string
+  weather_override: RainState | null
+}
+
+export interface RerouteSide {
+  duration_s: number
+  distance_m: number
+  zones: PassedZone[]
+  hard_zone_ids: string[]
+  soft_zone_ids: string[]
+}
+
+export interface RerouteResult {
+  action: RerouteAction
+  status: PlanStatus
+  hard_groups: ZoneGroup[]
+  soft_groups: ZoneGroup[]
+  previous_level: number
+  weather: RouteWeather
+  route: OsrmRoute
+  current: RerouteSide
+  candidate: RerouteSide
+  avoided_zone_ids: string[]
+  text: string
+}
+
+export interface RerouteExplainBody {
+  action: RerouteAction
+  previous: RainState
+  now: RainState
+  current: ExplainSide
+  candidate: ExplainSide
+  hard_groups: ZoneGroup[]
+  soft_groups: ZoneGroup[]
+}
+
+export type RerouteExplainResult = RouteExplainResult
+
 export interface RouteRequestBody {
   origin: { lon: number; lat: number }
   destination: { lon: number; lat: number }

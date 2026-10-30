@@ -38,8 +38,8 @@ class FakeEngine:
                 {"kind": "arrive", "name": "", "distance_m": 0.0, "duration_s": 0.0}]
 
     def route(self, origin: LonLat, destination: LonLat, *, exclude_polygons: Sequence[Ring] = (),
-              alternates: int = 0, timeout_s: float = 10.0) -> list[OsrmRoute]:
-        call = {"origin": origin, "destination": destination, "alternates": alternates,
+              alternates: int = 0, timeout_s: float = 10.0, heading: float | None = None) -> list[OsrmRoute]:
+        call = {"origin": origin, "destination": destination, "alternates": alternates, "heading": heading,
                 "exclude_polygons": [[tuple(p) for p in ring] for ring in exclude_polygons],
                 "timeout_s": timeout_s}
         self.calls.append(call)

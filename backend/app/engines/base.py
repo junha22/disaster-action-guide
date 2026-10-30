@@ -46,8 +46,11 @@ class RoutingEngine(Protocol):
     def exclude_limits(self) -> ExcludeLimits: ...
 
     def route(self, origin: LonLat, destination: LonLat, *, exclude_polygons: Sequence[Ring] = (),
-              alternates: int = 0, timeout_s: float = 10.0) -> list[OsrmRoute]:
-        """Return OSRM-format routes, best first, at most 1 + alternates."""
+              alternates: int = 0, timeout_s: float = 10.0, heading: float | None = None) -> list[OsrmRoute]:
+        """Return OSRM-format routes, best first, at most 1 + alternates.
+
+        `heading`: direction of travel at the origin in degrees, for a route starting mid-drive.
+        """
         ...
 
     def guidance(self, coordinates: Sequence[LonLat], *, timeout_s: float = 10.0) -> list[GuidanceStep]:

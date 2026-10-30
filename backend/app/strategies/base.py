@@ -20,6 +20,7 @@ class RouteNotFound(Exception):
 class RouteRequest:
     origin: LonLat
     destination: LonLat
+    origin_heading: float | None = None  # direction of travel, for a route starting mid-drive
 
 
 @dataclass(frozen=True)
@@ -177,7 +178,7 @@ def geometry_key(route: ScoredRoute) -> tuple:
 def baseline_routes(ctx: StrategyContext, request: RouteRequest, alternates: int = 0) -> list[ScoredRoute]:
     try:
         routes = ctx.engine.route(request.origin, request.destination, alternates=alternates,
-                                  timeout_s=ctx.remaining())
+                                  timeout_s=ctx.remaining(), heading=request.origin_heading)
     except (NoRouteFound, LocationNotRoutable):
         raise RouteNotFound() from None
     labels = ["기본 경로"] + [f"엔진 대안 {i}" for i in range(1, len(routes))]
@@ -269,7 +270,8 @@ def collect_candidates(ctx: StrategyContext, request: RouteRequest, types: Seque
             ask = alternates if ctx.remaining() >= ALTERNATES_MIN_TIME_S else 0
             routes = ctx.engine.route(request.origin, request.destination,
                                       exclude_polygons=[r for p in selected for r in p.rings],
-                                      alternates=ask, timeout_s=ctx.remaining())
+                                      alternates=ask, timeout_s=ctx.remaining(),
+                                      heading=request.origin_heading)
         except NoRouteFound:
             stop = "no_path"
             break

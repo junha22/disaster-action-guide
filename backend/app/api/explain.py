@@ -45,6 +45,12 @@ def _zones(side: RouteSide) -> tuple[ZoneLength, ...]:
     return tuple(ZoneLength(z.id, z.length_m) for z in side.zones)
 
 
+def zone_labels(config: AppConfig) -> tuple[dict[str, str], dict[str, str]]:
+    """(type -> label, avoidance group -> flood tier label)."""
+    return ({t: config.zone_types[t].label for t in ZONE_TYPES},
+            {g: config.zone_types[group_type(g)].tiers[group_tier(g)].label for g in ZONE_GROUPS if group_tier(g)})
+
+
 @router.post("/route/explain")
 def explain_route(body: ExplainBody,
                   config: Annotated[AppConfig, Depends(config_dep)],
@@ -53,9 +59,7 @@ def explain_route(body: ExplainBody,
                         route_duration_s=body.route.duration_s, baseline_duration_s=body.baseline.duration_s,
                         route_zones=_zones(body.route), baseline_zones=_zones(body.baseline),
                         fallback_engine=body.fallback_engine)
-    labels = {t: config.zone_types[t].label for t in ZONE_TYPES}
-    tier_labels = {g: config.zone_types[group_type(g)].tiers[group_tier(g)].label
-                   for g in ZONE_GROUPS if group_tier(g)}
+    labels, tier_labels = zone_labels(config)
     try:
         return explain(data, {z.id: z for z in layer.zones}, labels, tier_labels).as_dict()
     except UnknownZone:

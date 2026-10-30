@@ -210,9 +210,9 @@ function App() {
     }
   }
 
-  if (result && driveSteps) {
+  if (result && driveSteps && config) {
     return <DriveMode result={result} steps={driveSteps} scene={scene} zones={zones} destination={destination}
-      onExit={() => setDriveSteps(null)} />
+      levelRules={config.level_rules} onExit={() => setDriveSteps(null)} />
   }
 
   const resultCard = result && (

@@ -1,7 +1,8 @@
 // All calls use relative /api/ paths. Coordinates and search terms go in POST bodies only.
 import type {
-  AppConfig, GuidanceStep, LonLat, Place, RouteExplainBody, RouteExplainResult, RouteRequestBody, RouteResult,
-  SearchResult, StrategyInfo, WeatherInfo, ZoneFeatureCollection,
+  AppConfig, GuidanceStep, LonLat, Place, RerouteExplainBody, RerouteExplainResult, RerouteRequestBody, RerouteResult,
+  RouteExplainBody, RouteExplainResult, RouteRequestBody, RouteResult, SearchResult, StrategyInfo, WeatherInfo,
+  ZoneFeatureCollection,
 } from './types'
 
 export class ApiError extends Error {
@@ -48,6 +49,9 @@ export const api = {
   guidance: (coordinates: LonLat[]) => post<{ steps: GuidanceStep[] }>('/api/route/guidance', { coordinates }),
   explainRoute: (body: RouteExplainBody, signal?: AbortSignal) =>
     post<RouteExplainResult>('/api/route/explain', body, signal),
+  reroute: (body: RerouteRequestBody, signal?: AbortSignal) => post<RerouteResult>('/api/route/reroute', body, signal),
+  explainReroute: (body: RerouteExplainBody, signal?: AbortSignal) =>
+    post<RerouteExplainResult>('/api/route/reroute/explain', body, signal),
 }
 
 export function errorMessage(error: unknown, fallback: string): string {

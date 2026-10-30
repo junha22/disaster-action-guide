@@ -22,7 +22,7 @@ import os
 import re
 import threading
 import time
-from typing import Any, Iterable, get_args
+from typing import Any, Callable, Iterable, get_args
 
 import boto3
 from botocore.config import Config
@@ -63,6 +63,24 @@ SYSTEM_PROMPT = """너는 호우 위험 회피 경로 서비스에서 경로 선
 
 QUERY = "추천 경로를 고른 이유를 2~3문장으로 설명해 주세요."
 
+REROUTE_SYSTEM_PROMPT = """너는 운행 중 비가 강해졌을 때 경로 변경을 요청하는 이유를 운전자에게 설명하는 문장을 쓴다. 문장은 화면에 나오고 음성으로도 읽힌다.
+사용자 메시지의 JSON에 있는 사실만으로 한국어 해요체 2~3문장을 쓴다. 길이는 120자 안팎으로 한다.
+
+순서:
+- 강수가 어떻게 변해 강수 단계가 올랐는지 말한다.
+- 현재_경로의 남은 길이 반드시 피할 구간과 되도록 피할 구간을 몇 곳씩 지나는지 말한다. 0곳인 쪽은 말하지 않아도 된다.
+- 변경_경로에서 그 수가 어떻게 달라지는지와 추가_소요시간_분을 말한다. 추가_소요시간_분이 음수이면 그만큼 덜 걸린다고 쓴다.
+
+규칙:
+1. JSON에 있는 값만 쓴다. 숫자는 JSON에 적힌 그대로 옮기고, 더하거나 빼거나 반올림하지 않는다.
+2. '안전', '보장', '침수되지 않는', '위험이 없는' 같은 표현을 쓰지 않는다. 반드시_피할_구간_수, 되도록_피할_구간_수, 그_밖의_구간_수가 모두 0인 경로만 "알려진 위험 구간을 지나지 않아요"라고 쓴다.
+3. 과거 기록을 바탕으로 한 자료다. 지금 침수됐는지, 앞으로 침수될지는 말하지 않는다.
+4. 변경 여부는 운전자가 정한다. 경로를 바꾸라고 명령하지 않고, 운전이나 출발을 권하거나 말리지 않는다.
+5. 좌표, 링크, 목록 기호, 제목 없이 문장만 쓴다. 구간 이름은 꼭 필요할 때 하나만 쓴다.
+6. 회피_등급은 강수 단계마다 어느 침수 이력 구역부터 피할지 정한 분류다. 등급을 이유로 지나도 된다거나 덜 위험하다고 쓰지 않는다."""
+
+REROUTE_QUERY = "경로 변경을 요청하는 이유를 2~3문장으로 설명해 주세요."
+
 # Local backstop for the guardrail rules above (requirement 8.4).
 BANNED_PATTERNS = [re.compile(p) for p in (
     r"안전",
@@ -75,6 +93,8 @@ BANNED_PATTERNS = [re.compile(p) for p in (
     r"운전\s*(?:하세요|하십시오|해\s*주세요|을\s*권|해도)",
     r"(?:출발|이동)\s*(?:하세요|하십시오|해\s*주세요)",
     r"다른\s*경로\s*(?:를|로)\s*(?:이용|추천|선택)",
+    r"(?:변경|우회)\s*(?:하세요|하십시오|해\s*주세요)",  # the driver decides
+    r"(?:바꾸세요|바꿔\s*주세요)",
     r"https?://",
     r"덜\s*위험",                        # rule 7: a tier is not a lower risk
     r"지나도\s*(?:돼|되|괜찮)",
@@ -100,6 +120,23 @@ class ExplainInput:
     route_zones: tuple[ZoneLength, ...]
     baseline_zones: tuple[ZoneLength, ...]
     fallback_engine: bool = False  # 대체_계산: no alternative engine exists yet, so always false today
+
+
+@dataclass(frozen=True)
+class RerouteInput:
+    action: str              # "recommend" | "keep" | "no_better"
+    previous_rn1_mm: float
+    previous_alert: str
+    previous_level: int
+    rn1_mm: float
+    alert: str
+    level: int
+    current_duration_s: float
+    candidate_duration_s: float
+    current_zones: tuple[ZoneLength, ...]
+    candidate_zones: tuple[ZoneLength, ...]
+    hard_groups: tuple[str, ...]  # what the new level avoids
+    soft_groups: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -214,6 +251,87 @@ def template_text(facts: dict[str, Any]) -> str:
     return f"{lead}{first} {second}"
 
 
+# ---- reroute during a drive --------------------------------------------------------------------
+
+def _mm(value: float) -> int | float:
+    value = round(value, 1)
+    return int(value) if value == int(value) else value  # "75", as the check_output number rule reads it
+
+
+def _reroute_side(duration_s: float, items: Iterable[ZoneLength], data: RerouteInput, zones: dict[str, RiskZone],
+                  labels: dict[str, str], tier_labels: dict[str, str] | None) -> dict[str, Any]:
+    items = list(items)
+    for item in items:
+        if item.id not in zones:
+            raise UnknownZone(item.id)
+    hard, soft = set(data.hard_groups), set(data.soft_groups)
+    avoid = [z for z in items if zones[z.id].group in hard | soft]
+    return {"소요시간_분": _minutes(duration_s),
+            "반드시_피할_구간_수": sum(zones[z.id].group in hard for z in avoid),
+            "되도록_피할_구간_수": sum(zones[z.id].group in soft for z in avoid),
+            "피할_구간": _zone_facts(avoid, zones, labels, tier_labels)["위험_구간"],
+            "그_밖의_구간_수": len(items) - len(avoid)}
+
+
+def reroute_facts(data: RerouteInput, zones: dict[str, RiskZone], labels: dict[str, str],
+                  tier_labels: dict[str, str] | None = None) -> dict[str, Any]:
+    current = _reroute_side(data.current_duration_s, data.current_zones, data, zones, labels, tier_labels)
+    candidate = _reroute_side(data.candidate_duration_s, data.candidate_zones, data, zones, labels, tier_labels)
+    return {"판단": data.action,
+            "강수_변화": {"이전_강수_mm": _mm(data.previous_rn1_mm), "현재_강수_mm": _mm(data.rn1_mm),
+                      "이전_특보": ALERT_MODES.get(data.previous_alert, "없음"),
+                      "현재_특보": ALERT_MODES.get(data.alert, "없음"),
+                      "이전_단계": data.previous_level, "현재_단계": data.level},
+            "현재_경로": current, "변경_경로": candidate,
+            # From the seconds, not the rounded minutes: the screen shows the same difference.
+            "추가_소요시간_분": round((data.candidate_duration_s - data.current_duration_s) / 60)}
+
+
+def _rain_change(change: dict[str, Any]) -> str:
+    if change["현재_단계"] <= change["이전_단계"]:  # real rain was re-read and did not stay as high
+        return "강수 정보를 다시 확인했어요"
+    steps = f"강수 단계가 {change['이전_단계']}단계에서 {change['현재_단계']}단계로 올랐어요"
+    if change["현재_특보"] != "없음" and change["현재_특보"] != change["이전_특보"]:
+        return f"{change['현재_특보']}가 내려져 {steps}"
+    if change["현재_강수_mm"] != change["이전_강수_mm"]:
+        return f"시간당 강수량이 {change['이전_강수_mm']}mm에서 {change['현재_강수_mm']}mm로 늘어 {steps}"
+    return steps
+
+
+def _avoid_phrase(side: dict[str, Any]) -> str:
+    parts = []
+    if side["반드시_피할_구간_수"]:
+        parts.append(f"반드시 피할 구간 {side['반드시_피할_구간_수']}곳")
+    if side["되도록_피할_구간_수"]:
+        parts.append(f"되도록 피할 구간 {side['되도록_피할_구간_수']}곳")
+    return "과 ".join(parts)
+
+
+def _candidate_sentence(current: dict[str, Any], candidate: dict[str, Any], extra: int) -> str:
+    phrase = _avoid_phrase(candidate)
+    if phrase:
+        time_part = f"{extra}분 더 걸리고" if extra > 0 else "소요시간이 비슷하고" if extra == 0 else f"{-extra}분 덜 걸리고"
+        if current["반드시_피할_구간_수"] and not candidate["반드시_피할_구간_수"]:
+            return f"변경 경로는 {time_part} 반드시 피할 구간은 지나지 않지만 {phrase}은 지나요."
+        return f"변경 경로는 {time_part} {phrase}을 지나요."
+    time_part = f"{extra}분 더 걸리지만" if extra > 0 else "소요시간은 비슷하지만" if extra == 0 else f"{-extra}분 덜 걸리고"
+    if candidate["그_밖의_구간_수"]:
+        return (f"변경 경로는 {time_part} 이번 단계에 피할 구간을 지나지 않아요. "
+                f"그 밖의 위험 구간 {candidate['그_밖의_구간_수']}곳은 지나요.")
+    return f"변경 경로는 {time_part} 알려진 위험 구간을 지나지 않아요."
+
+
+def reroute_template(facts: dict[str, Any]) -> str:
+    first = _rain_change(facts["강수_변화"])
+    current, candidate = facts["현재_경로"], facts["변경_경로"]
+    if facts["판단"] == "keep":
+        return f"{first}. 남은 경로에는 이번 단계에서 피할 구간이 없어 지금 경로를 유지해요."
+    second = f"지금 경로는 남은 길에서 {_avoid_phrase(current)}을 지나요."
+    if facts["판단"] == "no_better":
+        return f"{first}. {second} 더 나은 경로를 찾지 못해 지금 경로로 안내해요."
+    return f"{first}. {second} {_candidate_sentence(current, candidate, facts['추가_소요시간_분'])}"
+
+
 # ---- output check ------------------------------------------------------------------------------
 
 def check_output(text: str, facts_json: str) -> str | None:
@@ -287,23 +405,24 @@ class ExplanationCache:
 cache = ExplanationCache()
 
 
-def _converse(facts_json: str, cfg: Settings) -> tuple[str | None, str | None]:
+def _converse(facts_json: str, cfg: Settings, system: str = SYSTEM_PROMPT,
+              query: str = QUERY) -> tuple[str | None, str | None]:
     client = boto3.client(
         "bedrock-runtime", region_name=cfg.region,
         config=Config(connect_timeout=3, read_timeout=cfg.timeout_s, retries={"max_attempts": 1}))
     kwargs: dict[str, Any] = {
         "modelId": cfg.model_id,
-        "system": [{"text": SYSTEM_PROMPT}],
+        "system": [{"text": system}],
         "inferenceConfig": {"maxTokens": 300, "temperature": 0.2},
     }
     if cfg.guardrail_id:
         # Contextual grounding check: the facts are the grounding source, QUERY is the query.
         content = [{"guardContent": {"text": {"text": facts_json, "qualifiers": ["grounding_source"]}}},
-                   {"guardContent": {"text": {"text": QUERY, "qualifiers": ["query"]}}}]
+                   {"guardContent": {"text": {"text": query, "qualifiers": ["query"]}}}]
         kwargs["guardrailConfig"] = {"guardrailIdentifier": cfg.guardrail_id,
                                      "guardrailVersion": cfg.guardrail_version, "trace": "disabled"}
     else:
-        content = [{"text": facts_json}, {"text": QUERY}]
+        content = [{"text": facts_json}, {"text": query}]
     response = client.converse(messages=[{"role": "user", "content": content}], **kwargs)
     if response.get("stopReason") == "guardrail_intervened":
         return None, "guardrail"
@@ -311,17 +430,14 @@ def _converse(facts_json: str, cfg: Settings) -> tuple[str | None, str | None]:
     return " ".join(p["text"].strip() for p in parts if "text" in p).strip(), None
 
 
-def explain(data: ExplainInput, zones: dict[str, RiskZone], labels: dict[str, str],
-            tier_labels: dict[str, str] | None = None) -> ExplainResult:
-    facts = build_facts(data, zones, labels, tier_labels)
-    fallback = template_text(facts)
-
+def _write(facts: dict[str, Any], fallback: str, wanted: bool,
+           converse: Callable[[str, Settings], tuple[str | None, str | None]]) -> ExplainResult:
     def use_template(reason: str) -> ExplainResult:
         if reason not in {"not_needed", "mock"}:
             log.warning("경로 설명을 템플릿으로 대체했습니다: %s", reason)  # never log the facts
         return ExplainResult(fallback, "template", reason)
 
-    if not needs_ai(data):
+    if not wanted:
         return use_template("not_needed")
     if ai_mode() == "mock":
         return use_template("mock")
@@ -339,7 +455,7 @@ def explain(data: ExplainInput, zones: dict[str, RiskZone], labels: dict[str, st
     except QuotaExceeded:
         return use_template("quota")
     try:
-        text, blocked = _converse(facts_json, cfg)
+        text, blocked = converse(facts_json, cfg)
     except (ReadTimeoutError, ConnectTimeoutError):
         return use_template("timeout")
     except ClientError as exc:
@@ -357,3 +473,20 @@ def explain(data: ExplainInput, zones: dict[str, RiskZone], labels: dict[str, st
         return use_template(problem)
     cache.put(key, text)
     return ExplainResult(text, "ai", None)
+
+
+def explain(data: ExplainInput, zones: dict[str, RiskZone], labels: dict[str, str],
+            tier_labels: dict[str, str] | None = None) -> ExplainResult:
+    facts = build_facts(data, zones, labels, tier_labels)
+    return _write(facts, template_text(facts), needs_ai(data), _converse)
+
+
+def explain_reroute(data: RerouteInput, zones: dict[str, RiskZone], labels: dict[str, str],
+                    tier_labels: dict[str, str] | None = None) -> ExplainResult:
+    """Only a change request is written by AI; the other outcomes are fixed sentences."""
+    facts = reroute_facts(data, zones, labels, tier_labels)
+
+    def converse(facts_json: str, cfg: Settings) -> tuple[str | None, str | None]:
+        return _converse(facts_json, cfg, REROUTE_SYSTEM_PROMPT, REROUTE_QUERY)
+
+    return _write(facts, reroute_template(facts), data.action == "recommend", converse)
