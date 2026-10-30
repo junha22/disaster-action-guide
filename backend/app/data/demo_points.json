@@ -1,0 +1,12 @@
+{
+  "notice": "데모 지점 좌표는 대략값입니다.",
+  "points": [
+    {"id": "demo-songjeong", "name": "광주송정역", "address": "광주 광산구 상무대로 201", "lon": 126.7930, "lat": 35.1379, "note": "데모 구간 출발지"},
+    {"id": "demo-gwangju-station", "name": "광주역", "address": "광주 북구 무등로 235", "lon": 126.9090, "lat": 35.1652, "note": "데모 구간 목적지"},
+    {"id": "demo-usquare", "name": "광주종합버스터미널(유스퀘어)", "address": "광주 서구 무진대로 904", "lon": 126.8790, "lat": 35.1606, "note": ""},
+    {"id": "demo-city-hall", "name": "광주광역시청", "address": "광주 서구 내방로 111", "lon": 126.8514, "lat": 35.1600, "note": ""},
+    {"id": "demo-jnu", "name": "전남대학교", "address": "광주 북구 용봉로 77", "lon": 126.9050, "lat": 35.1767, "note": ""},
+    {"id": "demo-acc", "name": "국립아시아문화전당", "address": "광주 동구 문화전당로 38", "lon": 126.9200, "lat": 35.1467, "note": ""},
+    {"id": "demo-nongseong-underpass", "name": "농성지하차도 부근 (시나리오 D 시연용)", "address": "광주 서구 농성동", "lon": 126.88387, "lat": 35.15323, "note": "더미 지하차도 구역 안. 35mm 이상에서 목적지로 고르면 회피 불가 경고가 나온다."}
+  ]
+}

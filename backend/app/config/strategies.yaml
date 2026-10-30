@@ -1,0 +1,28 @@
+# Route-avoidance parameters (design.md 5.6). Values marked 초안 in design.md can be tuned here.
+# A route request may override some of them through "params"; see app/strategies/params.py.
+version: 1
+
+zone_types:
+  underpass:     {label: 지하차도,  weight: 3, avoid_buffer_m: 30, color: "#dc2626"}
+  flood_history: {label: 침수 이력, weight: 2, avoid_buffer_m: 20, color: "#ea580c"}
+  riverside:     {label: 하천변,    weight: 1, avoid_buffer_m: 50, color: "#2563eb"}
+
+rain_levels:
+  # 1-hour rainfall (mm) at which level 1, 2, 3 start.
+  thresholds_mm: [30, 50, 70]
+  avoid_by_level:
+    0: []
+    1: [underpass]
+    2: [underpass, flood_history]
+    3: [underpass, flood_history, riverside]
+
+# Heavy-rain alerts raise the level to at least this value.
+alert_min_level: {advisory: 1, warning: 2}
+
+default_strategy: tiered_rain
+
+strategies:
+  rerank: {lambda: 1.0}
+
+engine:
+  timeout_s: 10

@@ -1,0 +1,59 @@
+{
+  "description": "손으로 만든 더미 위험 구역. 실제 자료가 아니다. 위치는 OpenStreetMap 도로·하천(© OpenStreetMap 기여자, ODbL)을 참고했고 위험 여부는 지어낸 값이다. 데모 구간 광주송정역 → 광주역 주변에 배치했다(design.md 4.3).",
+  "defaults": {
+    "source_name": "더미 데이터 — 실제 자료 아님",
+    "checked_at": "2026-10-30",
+    "is_dummy": true,
+    "active": true
+  },
+  "records": [
+    {
+      "id": "dummy-underpass-1",
+      "name": "농성지하차도 (더미)",
+      "type": "underpass",
+      "source_url": "https://www.data.go.kr",
+      "note": "OSM의 농성지하차도 터널 선. baseline 경로가 지난다.",
+      "geometry": {"type": "LineString", "coordinates": [[126.883598, 35.15318], [126.884139, 35.153272]]}
+    },
+    {
+      "id": "dummy-underpass-2",
+      "name": "사암로 지하 구간 (더미)",
+      "type": "underpass",
+      "source_url": "https://www.data.go.kr",
+      "note": "OSM의 사암로 터널 선. 데모 구간 근처의 두 번째 지하차도.",
+      "geometry": {"type": "LineString", "coordinates": [[126.808108, 35.161105], [126.808242, 35.162093]]}
+    },
+    {
+      "id": "dummy-flood-1",
+      "name": "상무대로 침수 이력 구간 (더미)",
+      "type": "flood_history",
+      "source_url": "https://www.safemap.go.kr",
+      "note": "baseline 경로의 상무대로 약 400m 구간.",
+      "geometry": {"type": "LineString", "coordinates": [[126.856511, 35.150046], [126.860817, 35.150753]]}
+    },
+    {
+      "id": "dummy-flood-2",
+      "name": "무진대로 침수 이력 구간 (더미)",
+      "type": "flood_history",
+      "source_url": "https://www.safemap.go.kr",
+      "note": "지하차도만 피할 때의 우회로(무진대로) 약 450m 구간.",
+      "geometry": {"type": "LineString", "coordinates": [[126.8357, 35.161604], [126.83792, 35.16175], [126.839617, 35.161981], [126.840581, 35.162176]]}
+    },
+    {
+      "id": "dummy-riverside-1",
+      "name": "광주천 죽봉대로 부근 하천변 (더미)",
+      "type": "riverside",
+      "source_url": "https://www.data.go.kr",
+      "note": "OSM 광주천 중심선 약 700m. 죽봉대로가 건넌다.",
+      "geometry": {"type": "LineString", "coordinates": [[126.886088, 35.16565], [126.884668, 35.168396], [126.88356, 35.169075], [126.882499, 35.169537], [126.881067, 35.169811]]}
+    },
+    {
+      "id": "dummy-riverside-2",
+      "name": "광주천 양동 부근 하천변 (더미)",
+      "type": "riverside",
+      "source_url": "https://www.data.go.kr",
+      "note": "OSM 광주천 중심선 약 300m.",
+      "geometry": {"type": "LineString", "coordinates": [[126.904549, 35.153425], [126.901955, 35.155383]]}
+    }
+  ]
+}

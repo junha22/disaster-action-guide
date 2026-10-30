@@ -1,0 +1,11 @@
+# Team packages installed on top of requirements.local.lock (conda env: disaster-action-guide, Python 3.12).
+# requirements.lock / requirements.local.lock are unchanged. Install with:
+#   conda run -n disaster-action-guide python -m pip install -r backend/requirements.team.txt
+pyvalhalla==3.9.1
+shapely==2.2.0
+pyproj==3.8.0
+# dependency of shapely
+numpy==2.5.4
+
+# Tile-build tool only (not imported by the backend), kept in a separate conda env:
+#   conda create -n disaster-action-guide-osm -c conda-forge --override-channels osmium-tool=1.19.1 -y

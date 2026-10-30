@@ -2,7 +2,7 @@
 #root {
   width: 100%;
   max-width: none;
-  min-height: 100vh;
+  min-height: 100dvh;
   margin: 0;
   padding: 0;
   display: block;
@@ -15,18 +15,43 @@ body {
   min-width: 320px;
 }
 
-.kiro-app h1,
-.kiro-app h2 {
+.app-shell h1,
+.app-shell h2 {
   color: inherit;
   margin: 0;
   letter-spacing: normal;
+  font-size: inherit;
+  line-height: inherit;
 }
 
-.kiro-app {
-  width: 100%;
+.app-shell h1 {
+  font-size: 1.125rem;
 }
 
-.kiro-app select:focus-visible {
+.app-shell select:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
+}
+
+.risk-popup {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #111827;
+}
+
+.risk-popup strong {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 13px;
+}
+
+.risk-popup a {
+  color: #1d4ed8;
+  text-decoration: underline;
+}
+
+.risk-popup-dummy {
+  margin-top: 4px;
+  font-weight: 600;
+  color: #c2410c;
 }
