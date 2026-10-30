@@ -702,7 +702,7 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 - 남은 시간: 화면의 남은 시간과 같은 값(전체 소요시간 × 남은 거리 비율)을 클라이언트가 보낸다. 구간 수는 서버가 남은 경로 좌표로 직접 계산한다. 좌표는 저장하거나 기록하지 않는다.
 - 설명: `route_explainer.reroute_facts`, `reroute_template`, `explain_reroute`. 요구사항 8과 같은 호출·검사·캐시 경로(`_write`)를 쓰고, 프롬프트만 따로 둔다. 추가 소요시간은 반올림한 분끼리 빼지 않고 초 차이에서 구해 화면의 값과 어긋나지 않게 한다.
 - 화면: `DriveMode`는 경로를 `Nav` 묶음 하나로 들고 `navRef`로 지도 루프에 넘긴다. 경로가 바뀌어도 지도를 다시 만들지 않고 선 데이터만 바꾼다. 지나온 길은 `travelledRef`로 이어 그린다. 요청 중에는 카메라를 위에서 본 전체 화면으로 옮기고 현재 경로는 호박색, 변경 경로는 청록색으로 그린다.
-- 음성: `frontend/src/lib/speech.ts`. 새 라이브러리 없이 `speechSynthesis`를 쓴다. 긴 문장에서 끊기는 브라우저가 있어 문장마다 나눠 읽고, "75mm", "1곳"은 읽기 좋게 바꾼다. 재탐색 알림과 변경 이유만 읽으며 회전 안내는 읽지 않는다.
+- 음성: `frontend/src/lib/speech.ts`. `POST /api/tts`(서버의 Supertonic, 새 패키지 없이 httpx로 호출)를 먼저 쓰고, 실패하면 `speechSynthesis`로 읽는다. 변경 요청은 `spokenRerouteSummary`의 짧은 문장만 읽고 AI 문장은 카드에만 둔다. 재탐색 알림과 요약만 읽으며 회전 안내는 읽지 않는다.
 - 테스트: `backend/tests/test_reroute.py`. 실제 엔진 확인은 광주송정역 → 광주역의 13개 지점 × 35·55·75mm(39건, 공통 후보와 지하차도 22곳 적용 후): `recommend` 20, `no_better` 6, `keep` 13. 기본 경로가 35mm 회피 경로와 같아져 35mm는 모두 `keep`이고, 75mm는 전체 경로의 32%·40% 지점에서만 `no_better`다.
 
 ## 20. 날씨 기준 위치 (요구사항 2.8~2.10)

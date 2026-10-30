@@ -1,4 +1,4 @@
-import { useEffect, useState, type Ref } from 'react'
+import { useEffect, useRef, useState, type Ref } from 'react'
 import { CloudRainWind, Loader2, Sparkles } from 'lucide-react'
 
 import { api } from '@/lib/api'
@@ -45,8 +45,13 @@ export default function RerouteCard({ decision, previous, cardRef, onSpeak, onAc
   const [explained, setExplained] = useState<RerouteExplainResult | null>(null)
   const [pending, setPending] = useState(true)
 
+  const spokenFor = useRef<RerouteResult | null>(null)
+
   // The short spoken version goes out at once; the AI wording only fills the card.
+  // Once per decision: React's development mode runs effects twice, and speech queues up.
   useEffect(() => {
+    if (spokenFor.current === decision) return
+    spokenFor.current = decision
     onSpeak(`${spokenRerouteSummary(decision)} ${ASK}`)
   }, [decision, onSpeak])
 
