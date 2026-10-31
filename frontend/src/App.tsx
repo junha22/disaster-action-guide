@@ -1,7 +1,8 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUpDown, Info, Loader2, Play } from 'lucide-react'
+import { ArrowUpDown, Info, Loader2 } from 'lucide-react'
 
 import DriveMode, { type DriveExit } from '@/components/DriveMode'
+import ParkingCard from '@/components/ParkingCard'
 import RoutePanel from '@/components/RoutePanel'
 import RouteResultCard from '@/components/RouteResultCard'
 import SearchBar from '@/components/SearchBar'
@@ -32,7 +33,6 @@ interface WeatherChoice {
   alert: Alert
 }
 
-const DEMO_ROUTE = { origin: '광주송정역', destination: '광주역' }
 const CLOCK_CHECK_MS = 5 * 60 * 1000
 const DEFAULT_WEATHER_PLACE = 'gwangju'
 // The stations renew every minute and the server keeps a table for 2 minutes.
@@ -280,18 +280,6 @@ function App() {
   const sceneTime = timeChoice ?? clockTime
   const scene = useMemo(() => weatherScene(sceneRain, sceneLevel, sceneTime), [sceneRain, sceneLevel, sceneTime])
   const mapTheme = mapThemeFor(sceneTime)
-  const demoOrigin = demoPoints.find(p => p.name === DEMO_ROUTE.origin)
-  const demoDestination = demoPoints.find(p => p.name === DEMO_ROUTE.destination)
-
-  function startDemo() {
-    if (!demoOrigin || !demoDestination) return
-    const next = { ...choice, demoMode: true }
-    scrollToResult.current = true
-    setOrigin(demoOrigin)
-    setDestination(demoDestination)
-    setChoice(next)
-    void runRoute(next, demoOrigin, demoDestination)
-  }
 
   async function startDrive() {
     if (!result) return
@@ -379,11 +367,6 @@ function App() {
             onAlertChange={alert => updateChoice({ ...choice, alert }, true)} />
 
           <div className="glass-card space-y-3">
-            {demoOrigin && demoDestination && (
-              <Button type="button" variant="secondary" className="w-full" disabled={busy} onClick={startDemo}>
-                <Play />시연 경로 보기 · {DEMO_ROUTE.origin} → {DEMO_ROUTE.destination}
-              </Button>
-            )}
             <p className="text-xs leading-5 text-muted-foreground">
               운행 중 비가 강해지면 남은 길을 다시 판단하고, 왜 바꾸는지 설명해요.
             </p>
@@ -408,6 +391,8 @@ function App() {
               }} error={routeError} />
           </div>
 
+          <ParkingCard demoPoints={demoPoints} bbox={config?.service_area_bbox ?? null} />
+
           <footer className="glass-card space-y-1.5 text-xs leading-5" role="note">
             <p className="text-muted-foreground">
               비가 많이 올수록 지하차도와 침수 이력 도로를 단계적으로 피하는 자동차 경로입니다.
@@ -421,7 +406,7 @@ function App() {
               {dummyNotice(zones, config?.zone_types) ? ` · ${dummyNotice(zones, config?.zone_types)}` : ''}.
             </p>
             <p className="text-muted-foreground">
-              출발지·목적지와 검색어는 서버에 저장하지 않습니다. 지도 타일은 OpenFreeMap에서 받습니다.
+              출발지·목적지, 주차 위치와 검색어는 서버에 저장하지 않습니다. 지도 타일은 OpenFreeMap에서 받습니다.
             </p>
           </footer>
         </div>

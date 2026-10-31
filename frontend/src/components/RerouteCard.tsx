@@ -6,7 +6,8 @@ import { formatDuration, signed } from '@/lib/format'
 import { rerouteExplainBody, spokenRerouteSummary } from '@/lib/reroute'
 import type { RainState, RerouteExplainResult, RerouteResult, RerouteSide } from '@/lib/types'
 
-const ASK = '경로를 변경할까요?'
+const AUTO_CHANGE_S = 3
+const GOING_AHEAD = '경로를 변경해요.'
 
 interface Props {
   decision: RerouteResult
@@ -39,20 +40,35 @@ function SideColumn({ title, side, dot, added }: { title: string; side: RerouteS
   )
 }
 
-// Asks the driver. The route logic has already decided what to offer; AI only words the reason,
-// and the computed template is on screen from the start.
+// Changes the route after a short count unless the driver keeps the current one. The route logic has
+// already decided what to offer; AI only words the reason, and the computed template is on screen from the start.
 export default function RerouteCard({ decision, previous, cardRef, onSpeak, onAccept, onDecline }: Props) {
   const [explained, setExplained] = useState<RerouteExplainResult | null>(null)
   const [pending, setPending] = useState(true)
 
+  const [left, setLeft] = useState(AUTO_CHANGE_S)
+  const accept = useRef(onAccept)
   const spokenFor = useRef<RerouteResult | null>(null)
+
+  useEffect(() => {
+    accept.current = onAccept
+  }, [onAccept])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setLeft(value => value - 1), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    if (left === 0) accept.current()
+  }, [left])
 
   // The short spoken version goes out at once; the AI wording only fills the card.
   // Once per decision: React's development mode runs effects twice, and speech queues up.
   useEffect(() => {
     if (spokenFor.current === decision) return
     spokenFor.current = decision
-    onSpeak(`${spokenRerouteSummary(decision)} ${ASK}`)
+    onSpeak(`${spokenRerouteSummary(decision)} ${GOING_AHEAD}`)
   }, [decision, onSpeak])
 
   useEffect(() => {
@@ -78,7 +94,7 @@ export default function RerouteCard({ decision, previous, cardRef, onSpeak, onAc
       <header className="reroute-head">
         <span className="reroute-head-icon"><CloudRainWind /></span>
         <div className="min-w-0">
-          <h2 id="reroute-title">비가 강해져 경로 변경을 요청해요</h2>
+          <h2 id="reroute-title">비가 강해져 경로를 변경해요</h2>
           <p>
             강수 {decision.previous_level}단계 → {decision.weather.level}단계
             {demo && <span className="reroute-demo">시연 값 · 실제 기상 아님</span>}
@@ -100,10 +116,10 @@ export default function RerouteCard({ decision, previous, cardRef, onSpeak, onAc
       </div>
 
       <div className="reroute-actions">
-        <button type="button" className="reroute-accept" autoFocus onClick={onAccept}>경로 변경</button>
+        <button type="button" className="reroute-accept" autoFocus onClick={onAccept}>경로 변경 · {left}초</button>
         <button type="button" className="reroute-decline" onClick={onDecline}>현재 경로 유지</button>
       </div>
-      <p className="reroute-note">시연 주행은 선택할 때까지 멈춥니다. 실제 침수 여부는 확인하지 않습니다.</p>
+      <p className="reroute-note">누르지 않으면 {left}초 뒤 자동으로 변경해요. 실제 침수 여부는 확인하지 않습니다.</p>
     </section>
   )
 }

@@ -1,6 +1,6 @@
 // All calls use relative /api/ paths. Coordinates and search terms go in POST bodies only.
 import type {
-  AppConfig, GuidanceStep, LonLat, Place, RerouteExplainBody, RerouteExplainResult, RerouteRequestBody, RerouteResult,
+  AppConfig, GuidanceStep, LonLat, ParkingCheck, Place, RerouteExplainBody, RerouteExplainResult, RerouteRequestBody, RerouteResult,
   RouteExplainBody, RouteExplainResult, RouteRequestBody, RouteResult, SearchResult, WeatherInfo,
   WeatherRegion, ZoneFeatureCollection,
 } from './types'
@@ -53,6 +53,8 @@ export const api = {
   reroute: (body: RerouteRequestBody, signal?: AbortSignal) => post<RerouteResult>('/api/route/reroute', body, signal),
   explainReroute: (body: RerouteExplainBody, signal?: AbortSignal) =>
     post<RerouteExplainResult>('/api/route/reroute/explain', body, signal),
+  parkingCheck: (body: { lon: number; lat: number; demo: boolean }, signal?: AbortSignal) =>
+    post<ParkingCheck>('/api/parking/check', body, signal),
 }
 
 export function errorMessage(error: unknown, fallback: string): string {

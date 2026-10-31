@@ -7,7 +7,7 @@ One table covers every station, so any number of places costs one request.
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import math
-from typing import Iterable
+from typing import Iterable, Iterator
 
 KST = timezone(timedelta(hours=9))
 # A station further away than this says little about the place; the grid observation is used instead.
@@ -56,10 +56,9 @@ def parse_stations(text: str) -> dict[str, Station]:
     return stations
 
 
-def parse_minute_table(text: str) -> dict[str, tuple[datetime, float]]:
-    """nph-aws2_min rows, located by the header's column names. {station id: (observed, RN-60m)}"""
+def _minute_rows(text: str) -> Iterator[tuple[str, datetime, float]]:
+    """nph-aws2_min rows, located by the header's column names: (station id, observed, RN-60m)."""
     columns: list[str] | None = None
-    rows = {}
     for line in text.splitlines():
         if line.startswith("#"):
             tokens = line[1:].split()
@@ -75,10 +74,22 @@ def parse_minute_table(text: str) -> dict[str, tuple[datetime, float]]:
         if len(parts) <= index:
             continue
         try:
-            observed = datetime.strptime(parts[0], "%Y%m%d%H%M").replace(tzinfo=KST)
-            rows[parts[1]] = (observed, float(parts[index]))
+            yield parts[1], datetime.strptime(parts[0], "%Y%m%d%H%M").replace(tzinfo=KST), float(parts[index])
         except ValueError:
             continue
+
+
+def parse_minute_table(text: str) -> dict[str, tuple[datetime, float]]:
+    """The last row of each station: {station id: (observed, RN-60m)}"""
+    rows = {station: (observed, rn60) for station, observed, rn60 in _minute_rows(text)}
+    if not rows:
+        raise AwsFormatError()
+    return rows
+
+
+def parse_station_rows(text: str, station: str) -> list[tuple[datetime, float]]:
+    """Every row of one station: [(observed, RN-60m)]"""
+    rows = [(observed, rn60) for row_station, observed, rn60 in _minute_rows(text) if row_station == station]
     if not rows:
         raise AwsFormatError()
     return rows

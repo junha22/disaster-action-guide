@@ -343,7 +343,8 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
     setNav(next)
     const added = decision.candidate.duration_s - decision.current.duration_s
     settle(rainRef.current, { tone: 'safe', text: `경로를 변경했어요 · 남은 시간 ${signed(added, formatDuration)}` })
-    say('경로를 변경했어요. 새 경로로 안내할게요.', true)
+    // Queued: three seconds is shorter than the summary, which should still finish.
+    say('새 경로로 안내할게요.')
   }
 
   function declineReroute() {

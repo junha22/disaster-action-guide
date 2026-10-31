@@ -107,7 +107,7 @@ export default function WeatherPanel(props: Props) {
           {!loading && (demoMode
             ? <span className="demo-pill">데모 값 · 실제 기상 아님</span>
             : <span className="text-white/80">
-              기상청{weather?.station ? ` ${weather.station} 관측소` : ''} · {formatObserved(weather?.observed_at ?? null)}
+              기상청 · {formatObserved(weather?.observed_at ?? null)}
             </span>)}
           {dummyZonesNotice && <Badge variant="outline" className="demo-pill !h-auto font-normal">{dummyZonesNotice}</Badge>}
         </div>
