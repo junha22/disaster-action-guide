@@ -12,9 +12,9 @@
 | 강수 단계 | 30 / 50 / 70mm (요구사항 4.5) |
 | 배포 | 로컬에서만 완성 |
 | 경로 엔진 | pyvalhalla 3.9.1 `valhalla.Actor`, 백엔드 프로세스 안에서 계산, Docker 없음 |
-| 지도 | maplibre-gl 6.16.0 + OpenFreeMap `liberty` 스타일, 출처 표기 유지 |
+| 지도 | maplibre-gl 6.16.0 + OpenFreeMap `positron`(낮)·`fiord`(밤) 스타일, 출처 표기 유지 |
 | 지오메트리 | shapely 2.2.0, 미터 계산은 pyproj 3.8.0으로 EPSG:5179 변환 |
-| AI | 회피 경로 설명만(18절). 공통 AI 코드(ai_service.py, routers/ai.py)와 Record CRUD는 그대로 둠 |
+| AI | 경로 설명과 경로 변경 이유만(18, 19절). 공통 AI 코드(ai_service.py, routers/ai.py)와 Record CRUD는 그대로 둠 |
 | 기록 저장 | 사용하지 않음. 좌표·검색어·경로를 DB·파일·로그에 남기지 않음 |
 
 ## 2. 전체 구조
@@ -24,7 +24,10 @@
   └─ 상대 경로 /api/ ─ Vite 프록시 ─ FastAPI (127.0.0.1:8000)
        ├─ api/route.py ─ strategies/(registry) ─ engines/valhalla.py ─ Valhalla Actor(.local-data/valhalla/tiles.tar)
        │                     └─ risk/layer.py, risk/scoring.py ─ data/risk_zones.geojson
-       ├─ api/weather.py ─ context/weather_kma.py (키 있음) | weather_mock.py (키 없음·실패)
+       ├─ api/reroute.py ─ reroute.py (운행 중 판단, 19절)
+       ├─ api/explain.py ─ route_explainer.py ─ Bedrock (18절)
+       ├─ api/tts.py ─ tts.py ─ 서버의 Supertonic (19절)
+       ├─ api/weather.py ─ context/weather_kma.py, weather_aws.py, weather_regions.py (키 있음) | weather_mock.py (키 없음·실패)
        ├─ api/search.py ─ 카카오 로컬 (키 있음) | data/demo_points.json (키 없음·실패)
        ├─ api/risk.py, api/strategies.py ─ 정적 데이터·설정
        └─ 기존 /api/health, /api/records, /api/ai/* (유지)
@@ -32,13 +35,14 @@
 
 ```
 backend/app/
-  api/          route.py, risk.py, search.py, weather.py, strategies.py   (main.py에 라우터 등록만 추가)
+  api/          route.py, reroute.py, explain.py, tts.py, risk.py, search.py, weather.py, strategies.py
   strategies/   base.py, registry.py, baseline.py, hard_exclude.py, tiered_rain.py, rerank.py
   engines/      base.py, valhalla.py, fake.py
   risk/         layer.py, scoring.py
-  context/      weather_kma.py, weather_mock.py, kakao.py
+  context/      weather_kma.py, weather_aws.py, weather_regions.py, weather_mock.py, kakao.py
   config/       strategies.yaml
   data/         risk_zones.geojson, demo_points.json
+  reroute.py, route_explainer.py, tts.py
 data_pipeline/  build_valhalla_tiles.ps1, pipeline.yaml, zones.py, build_risk_zones.py,
                 check_demo_scenario.py, sources/
 ```
@@ -55,6 +59,8 @@ import 시점에는 파일 읽기, Actor 생성, 외부 호출을 하지 않는�
 - 기준값과 반영 규칙은 `config/strategies.yaml`에 둔다.
 
 ### 3.2 기상청 초단기실황 (1시간 강수량)
+
+지금은 AWS 관측소 값(23절)을 먼저 쓰고, 쓸 수 없을 때 이 값을 쓴다. 지점별 조회는 20절에 있다.
 
 - `GET https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getUltraSrtNcst`. 요청 변수는 `serviceKey, pageNo, numOfRows, dataType=JSON, base_date, base_time, nx, ny`다.
 - 응답 `response.body.items.item[]`에서 `category == "RN1"`인 `obsrValue`(mm)를 읽는다(공공데이터포털 문서로 확인). 숫자가 아니면 오류로 본다.
@@ -96,14 +102,14 @@ FeatureCollection이다. geometry는 Polygon 또는 MultiPolygon이며, 버퍼�
 
 | 속성 | 설명 |
 | --- | --- |
-| `id` | 고유 ID (예: `dummy-underpass-1`) |
+| `id` | 고유 ID (예: `FLD-BUK-0001`) |
 | `name` | 표시 이름 |
 | `type` | `underpass` / `flood_history` / `riverside` |
 | `active` | 사용 여부. false면 경로 계산·지도에서 뺀다 |
-| `source_name` | 원본 자료 이름. 더미는 "더미 데이터 — 실제 자료 아님" |
-| `source_url` | 출처 URL. 더미는 나중에 받을 공개 자료 페이지(모르면 `https://www.data.go.kr`) |
-| `checked_at` | 확인일 `YYYY-MM-DD`. 더미는 작성일 `2026-10-30` |
-| `is_dummy` | 더미 여부. 화면에 "더미 데이터" 배지를 붙인다 |
+| `source_name` | 원본 자료 이름 |
+| `source_url` | 출처 URL |
+| `checked_at` | 확인일 `YYYY-MM-DD` |
+| `is_dummy` | 더미 여부. 지금 자료는 모두 false다. 참이면 화면에 "더미 데이터" 배지를 붙인다 |
 | `note` | 위치를 정한 근거 |
 | `flood_count`, `elev_m`, `low_pct`, `above_local_min_m`, `elev_status` | 침수 이력만. 원본의 침수 횟수와 DEM 고도 속성(가이드 3-3). 고도가 없으면 `null` |
 | `risk_tier`, `tier_reason` | 침수 이력만. 지형 등급(`high`/`normal`/`raised`)과 그 이유(5.8) |
@@ -225,11 +231,11 @@ class StrategyContext:
 
 ### 5.4 회피 실패 (요구사항 4.9, 5.5)
 
-'반드시 피함' 구역을 지나지 않는 후보가 하나도 없을 때 baseline 경로를 route로 돌려준다. explanation에는 `status: "avoid_failed"`, 경고 "위험 구역을 피하는 경로를 찾지 못했습니다", 이유, 경로가 지나는 위험 구역 목록을 담는다. 제외를 단계적으로 풀어 다시 찾는 방식은 쓰지 않는다. 이유는 5.7 탐색이 멈춘 원인으로 정한다. '되도록 피함' 구역만 남으면 실패가 아니라 `partially_avoided`다(5.5).
+'반드시 피함' 구역을 지나지 않는 후보가 하나도 없을 때 후보 중 '반드시 피함' 구역을 가장 적게 지나는 경로를 route로 돌려준다. 수가 같으면 소요시간 + 되도록 피함 벌점이 작은 쪽이다. explanation에는 `status: "avoid_failed"`, 경고 "위험 구역을 피하는 경로를 찾지 못했습니다", 이유, 경로가 지나는 위험 구역 목록을 담는다. 제외를 단계적으로 풀어 다시 찾는 방식은 쓰지 않는다. 이유는 5.7 탐색이 멈춘 원인으로 정한다. '되도록 피함' 구역만 남으면 실패가 아니라 `partially_avoided`다(5.5).
 
 | 원인 | 판정 방법 | 이유 문구 (초안) |
 | --- | --- | --- |
-| 출발지·목적지가 회피 다각형(버퍼 포함) 안 | 공통 후보를 모은 뒤 검사(돌려줄 baseline이 필요함) | "목적지가 '○○' 구역 안에 있습니다" |
+| 출발지·목적지가 회피 다각형(버퍼 포함) 안 | 공통 후보를 모은 뒤 검사(돌려줄 경로가 필요함) | "목적지가 '○○' 구역 안에 있습니다" |
 | 제외 후 도착 불가 | Valhalla 오류 코드 442, 170 | "위험 구역을 제외하면 도착할 수 있는 경로가 없습니다" |
 | 제외 다각형이 엔진 제한 초과 | 엔진 호출 전 둘레·꼭짓점 검사, Valhalla 오류 코드 167, 176 | "피할 구역이 너무 많거나 커서 경로 엔진이 처리하지 못했습니다" |
 | 제외 후 출발·목적지 근처 도로가 없음 | Valhalla 오류 코드 171 (회피 요청에서) | "출발지나 목적지 근처 도로가 모두 피해야 할 구역에 걸립니다" |
@@ -271,14 +277,16 @@ baseline 자체를 찾지 못하면 422 "두 지점 사이 자동차 경로를 �
 version: 1
 zone_types:
   underpass:     {label: 지하차도,  weight: 3, avoid_buffer_m: 30, color: "#dc2626", entry_penalty_s: 600, per_m_penalty_s: 2}
-  flood_history: {label: 침수 이력, weight: 2, avoid_buffer_m: 20, color: "#ea580c", entry_penalty_s: 120, per_m_penalty_s: 1}
+  flood_history:
+    {label: 침수 이력, weight: 2, avoid_buffer_m: 20, color: "#f59e0b", entry_penalty_s: 120, per_m_penalty_s: 1,
+     tiers: {high: {label: 우선 회피, penalty_scale: 1.5}, normal: {label: 일반, penalty_scale: 1.0}, raised: {label: 주변보다 높은 편, penalty_scale: 0.5}}}
   riverside:     {label: 하천변,    weight: 1, avoid_buffer_m: 50, color: "#2563eb", entry_penalty_s: 60,  per_m_penalty_s: 0.5}
 rain_levels:
   thresholds_mm: [30, 50, 70]
   avoid_by_level:          # hard: 반드시 피함, soft: 되도록 피함 (요구사항 4.5)
     0: {hard: [], soft: []}
-    1: {hard: [underpass], soft: []}
-    2: {hard: [underpass], soft: [flood_history]}
+    1: {hard: [underpass], soft: [flood_history.high]}
+    2: {hard: [underpass, flood_history.high], soft: [flood_history.normal, flood_history.raised]}
     3: {hard: [underpass, flood_history, riverside], soft: []}
 alert_min_level: {advisory: 1, warning: 2}
 default_strategy: tiered_rain
@@ -346,7 +354,7 @@ strategies:
 
 시연 지점 42쌍과 E 구간에서 0단계 경로가 지하차도를 지나는 쌍은 3쌍이고, 소요시간이 단계와 함께 줄어드는 쌍은 없다. 75mm 회피 실패는 23쌍이다.
 
-시나리오 A의 기본 경로는 지하차도 터널을 지나지 않는다. 0mm와 35mm가 같은 경로라서 `check_demo_scenario.py`가 `SCENARIO_A_SOME_STEPS_EQUAL`을 내고 종료 코드 1로 끝난다. 시연 구간은 사용자 결정 대기 중이다.
+시나리오 A의 기본 경로는 지하차도 터널을 지나지 않는다. 0mm와 35mm가 같은 경로라서 `check_demo_scenario.py`가 `SCENARIO_A_SOME_STEPS_EQUAL`을 내고 종료 코드 1로 끝난다. 0mm와 35mm가 같은 경로인 것은 문제로 보지 않고 시연 구간을 유지한다(사용자 결정).
 
 ### 5.8 침수 이력 지형 등급 (고도 반영)
 
@@ -380,7 +388,7 @@ strategies:
   - `GET /api/risk-zones` 속성에 `group`, `risk_tier`, `tier_reason`, `flood_count`, `elev_m`, `low_pct`, `above_local_min_m`, `elev_status`를 더한다(침수 이력만 값이 있다).
   - `GET /api/app-config`에 `zone_groups`(그룹별 `type`, `tier`, `label`)를 더하고, `level_rules`의 `avoid_by_level`·`hard_by_level`·`soft_by_level`은 그룹 키 목록으로 바꾼다.
   - explanation의 `hard_types`·`soft_types`는 `hard_groups`·`soft_groups`로 바꾸고 `avoid_groups`를 더한다. `avoid_types`는 그룹이 하나라도 걸린 유형이다(기존 호환).
-- 화면: 지도는 현재 단계에서 피하는 그룹만 진하게 그린다. 범례는 유형 일부만 피하면 "일부 회피 대상"이라고 쓴다. 강수 단계 문구와 팝업에 등급을 보여준다.
+- 화면: 지도는 가까이 볼 때 현재 단계에서 피하는 그룹과 이 경로가 지나는 구역을 진하게 그린다(22절). 범례는 유형 일부만 피하면 "일부 회피 대상"이라고 쓴다. 강수 단계 문구와 팝업에 등급을 보여준다.
 - 경로 설명(18절): 사실 JSON의 침수 이력 구역에 `회피_등급`을 더한다. 등급이 낮다고 지나도 된다고 쓰지 않도록 규칙을 한 줄 더한다.
 - 한계: DEM 격자(90m)가 구역(중앙값 지름 약 60m)보다 거칠다. 기준값 15·50과 배율은 검증된 값이 아니다(가이드 6-7). 시나리오 A의 55mm 경로가 지나는 FLD-BUK-0453은 `low_pct` 19.6이라 기준 20이면 우선 회피, 15면 일반이다.
 
@@ -467,15 +475,21 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 | `POST /api/search` | `{query}` → 장소 목록 |
 | `POST /api/route` | 경로 계획 |
 | `POST /api/route/explain` | 경로 설명 문장(18절) |
+| `POST /api/route/guidance` | 회전 안내(12.1절) |
+| `POST /api/route/reroute` | 운행 중 판단(19절) |
+| `POST /api/route/reroute/explain` | 경로 변경 이유 문장(19절) |
+| `POST /api/weather` | 지점의 날씨(20절) |
+| `GET /api/weather/regions` | 광주·전남 지역 목록(20절) |
+| `POST /api/tts` | 안내 음성(19절) |
 
 ### `GET /api/weather`
 ```json
 {"available": true, "source": "kma", "rn1_mm": 12.5, "alert": "none" | "advisory" | "warning",
  "alert_status": "ok" | "failed", "alert_label": "없음", "level": 0,
  "observed_at": "2026-10-30T18:00:00+09:00", "grid": {"nx": 58, "ny": 74},
- "message": null}
+ "region": "광주광역시", "routable": true, "station": "광주", "message": null}
 ```
-키가 없거나 실패하면 `available: false`, `message: "기상 정보를 가져오지 못했습니다"`다.
+키가 없거나 실패하면 `available: false`, `message: "기상 정보를 가져오지 못했습니다"`다. `station`은 값을 읽은 관측소이며 화면에 표시하지 않는다.
 
 ### `POST /api/search` `{query}` (2~50자, 앞뒤 공백 제거)
 ```json
@@ -549,20 +563,21 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
     - 기상청 값(강수량, 단계, 특보, 기준 시각, 출처 "기상청")
     - 데모 모드 스위치. 켜면 슬라이더(0~100mm, 5mm 단위)와 특보 선택이 나오고 "데모 값 · 실제 기상 아님" 배지를 붙인다.
   - `RoutePanel.tsx`
-    - 알고리즘 선택(기본 tiered_rain)과 경로 찾기 버튼(처리 중 비활성)
-    - 요약(거리, 소요, 알고리즘, 단계·출처)
-    - 회피 근거(피한 구역, 추가 시간·거리, 노출 점수 baseline → 선택), 경고, 대안 목록
-  - `MapView.tsx`: 선택 경로(보라), baseline 점선(회색, 켜고 끄기), 대안(연보라), 출발·도착 표시, 경로 범위 맞춤, 지도 출처 표기 유지. maplibre 번들이 커서 `React.lazy`로 따로 불러온다.
+    - 경로 찾기 버튼(처리 중 비활성)과 오류 문구. 알고리즘은 화면에서 고르지 않는다.
+  - `RouteResultCard.tsx`
+    - 요약(거리, 소요, 단계·출처), `RouteExplanation`(18절), 회피 근거(피한 구역, 추가 시간·거리, 노출 점수 baseline → 선택), 경고, 대안 목록, 안내 시작
+  - `DriveMode.tsx`(12.1절), `RerouteCard.tsx`(19절)
+  - `MapView.tsx`: 선택 경로, baseline 점선(켜고 끄기), 대안, 출발·도착 표시, 경로 범위 맞춤, 지도 출처 표기 유지. maplibre 번들이 커서 `React.lazy`로 따로 불러온다.
     - maplibre 6은 자기 모듈 옆에서 워커 파일을 찾는데, Vite 개발 서버의 의존성 사전 번들링이 모듈 위치를 바꿔 "Worker failed to load"가 난다. `maplibre-gl-worker.mjs?url`로 받은 주소를 `setWorkerUrl()`로 넘긴다.
   - `RiskLayer.tsx`
-    - 유형별 색과 범례(지도 왼쪽 위. 아래쪽은 모바일에서 출처 표기와 겹친다). 피하는 그룹(5.8)은 진하게, 나머지는 흐리게 그린다. 결과가 있으면 그 결과의 `avoid_groups`를 쓰고, 없으면 현재 단계로 정한다. 유형의 일부 등급만 피하면 범례에 "일부 회피 대상"이라고 쓴다.
-    - 구역 클릭 팝업(이름, 유형, 회피 등급과 이유, 침수 연도 수, 고도, 출처, 확인일, 더미 배지, 고도 참고 문구)
+    - 유형별 색과 범례(지도 왼쪽 위. 아래쪽은 모바일에서 출처 표기와 겹친다). 넓게 볼 때와 가까이 볼 때의 표시는 22절이다. 가까이 보면 피하는 그룹(5.8)과 이 경로가 지나는 구역은 진하게, 나머지는 흐리게 그린다. 결과가 있으면 그 결과의 `avoid_groups`를 쓰고, 없으면 현재 단계로 정한다. 유형의 일부 등급만 피하면 범례에 "일부 회피 대상"이라고 쓴다.
+    - 구역 클릭 팝업(이름, 유형, 회피 등급과 이유, 침수 연도 수, 고도, 출처, 확인일, 고도 참고 문구)
   - `lib/api.ts`, `lib/types.ts`, `lib/level.ts`(`app-config`의 규칙으로 화면에서 단계 계산)
 - **UI 컴포넌트**: 기존 shadcn/ui(button, card, badge, input, label)와 lucide를 재사용한다. 슬라이더와 스위치는 이미 의존성에 있는 `radix-ui`로 shadcn 형식의 `components/ui/slider.tsx`, `switch.tsx`를 추가한다. 새 npm 패키지는 없다.
 - **다시 계산**(요구사항 6.6): 결과가 있을 때 슬라이더를 놓거나(`onValueCommit`) 특보를 바꿔 단계가 결과의 단계와 달라지면 1회 다시 계산한다. 단계가 같으면 다시 계산하지 않는다. 새 결과가 오면 이전 결과를 지운다(요구사항 6.8).
 - **안전 고지**(항상 표시, 요구사항 7.1·7.2)
   - "이 서비스는 실제 도로 통제와 침수 여부를 확인하지 않습니다. 지하차도 통제, 재난문자, 경찰·지자체 안내를 먼저 따르세요."
-  - "실시간 교통 미반영 · 위험 구역 데이터 기준일 2026-10-30 · 더미 데이터 포함"
+  - "실시간 교통을 반영하지 않습니다. 위험 구역 데이터 기준일 ○○"
 - 템플릿 대시보드(App.tsx)는 대체한다. 기록 CRUD 화면은 사라지지만 백엔드 API는 남는다.
 - 좌표·검색어를 URL, localStorage에 넣지 않는다.
 
@@ -572,7 +587,7 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 - uvicorn 접근 로그에는 메서드와 경로만 찍힌다. 본문은 찍히지 않는다.
 - 예외 처리기와 오류 문구에 요청 본문, 카카오·기상청 원문 오류, 키를 넣지 않는다.
 - Record DB는 건드리지 않는다. AI 호출량 DB는 경로 설명이 실제 Bedrock을 부를 때만 1회 센다(캐시 적중·모의 모드는 세지 않음).
-- 밖으로 나가는 정보는 카카오에 검색어·범위, 기상청에 격자(58, 74)·특보 조회 조건, Bedrock에 경로 설명용 사실(좌표 없음, 18절)뿐이다. 브라우저는 OpenFreeMap에 지도 타일을 요청한다(요구사항 7.5).
+- 밖으로 나가는 정보는 카카오에 검색어·범위, 기상청에 5km 격자 번호·특보 조회 조건, Bedrock에 경로 설명과 변경 이유용 사실(좌표 없음, 18·19절)뿐이다. 브라우저는 OpenFreeMap에 지도 타일을 요청한다(요구사항 7.5).
 
 ## 11. 환경변수
 
@@ -580,6 +595,7 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 | --- | --- | --- |
 | `KAKAO_REST_API_KEY` | 장소 검색 | 데모 지점 |
 | `KMA_SERVICE_KEY` | 초단기실황·특보 | 데모 모드 |
+| `KMA_AWS_KEY` | AWS 분 단위 강수(23절) | 초단기실황 |
 | `VALHALLA_CONFIG` | Valhalla 설정 경로 | `.local-data/valhalla/valhalla.json` |
 | `ROUTING_TIMEOUT_S` | 경로 요청 시간 제한 | 10 |
 | `KIROTHON_AI_MODE` | `mock` / `bedrock` | `bedrock` (로컬 스크립트는 `mock`) |
@@ -587,6 +603,7 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 | `KIROTHON_EXPLAIN_MODEL` | 경로 설명 모델(ai_service.py 허용 목록 안) | Claude Haiku 4.5 |
 | `KIROTHON_EXPLAIN_TIMEOUT_S` | 경로 설명 응답 대기(1~30초) | 8 |
 | `KIROTHON_BEDROCK_GUARDRAIL_ID`, `_VERSION` | Bedrock Guardrails | 없음: 서버 자체 검사만 |
+| `KIROTHON_TTS_URL`, `_VOICE`, `_SPEED`, `_TIMEOUT_S` | 서버 음성(Supertonic) | 브라우저 음성 |
 | `KIROTHON_ENV_FILE` | 읽을 .env 경로. 빈 값이면 읽지 않음(테스트) | `backend/.env` |
 
 - 키와 설정을 넣는 곳은 세 곳이고, 위에 있는 것이 우선한다.
@@ -608,19 +625,19 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 - 프론트: 기존 `scripts/dev-frontend.ps1`
 - 새 Python 패키지는 `backend/requirements.team.txt`에 적었다. 두 잠금 파일은 바꾸지 않는다.
 
-### 12.1 운행 화면 (시연 주행)
+### 12.1 운행 화면 (시연 주행, 요구사항 10)
 
 - `안내 시작`을 누르면 선택된 경로로 `POST /api/route/guidance`를 호출해 회전 안내를 받고 전체 화면 운행 모드로 들어간다. 좌표는 본문으로만 보내고 저장하거나 로그에 남기지 않는다.
 - 회전 안내는 Valhalla `trace_route`에 `format: json`, `directions_type: maneuvers`로 받는다. Windows에서 OSRM 형식은 도로명 인코딩 오류가 나기 때문이다. `POST /api/route`는 그대로 `directions_type: none`을 쓴다.
 - 안내를 받지 못해도 경로선만으로 주행을 계속한다.
-- 차량 위치는 **실제 GPS가 아니라 시연 주행**이다. 경로를 따라 구간별 예상 속도로 움직이고 화면에 시연임을 표시한다. 아직 없는 것: 실제 위치 추적, 경로 이탈 재탐색, 차선·카메라 안내, 음성 안내.
+- 차량 위치는 **실제 GPS가 아니라 시연 주행**이다. 경로를 따라 구간별 예상 속도로 움직이고 화면에 시연임을 표시한다. 없는 것: 실제 위치 추적, 경로 이탈 재탐색, 차선·카메라 안내, 회전 음성 안내.
 
 ## 13. 오류 처리 요약
 
 | 상황 | 백엔드 | 화면 |
 | --- | --- | --- |
 | 타일 없음·엔진 시간 초과 | 503 | "경로 엔진에 연결할 수 없습니다" |
-| 회피 실패 | 200 `avoid_failed` + baseline | 경고, 이유, 지나는 구역 |
+| 회피 실패 | 200 `avoid_failed` + 가장 적게 지나는 경로 | 경고, 이유, 지나는 구역 |
 | 카카오 키 없음·실패 | `mode: demo` | 안내 문구 + 데모 지점 |
 | 기상청 키 없음·실패 | `available: false` | "기상 정보를 가져오지 못했습니다" + 데모 모드 |
 | 특보만 실패 | `alert_status: failed` | "특보 확인 실패" |
@@ -643,6 +660,11 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 | 2.1~2.7 | `test_weather.py` | 실황·특보 파싱(httpx.MockTransport), 경기 광주 코드 제외, 10분 캐시, 키 없음·실패, 오류에 키 없음 |
 | 1.1~1.8 | `test_search.py` | 광주 밖 `selectable: false`, 2글자 미만 422, 키 없음·오류 → demo, 현재 위치 미전송 |
 | 7.3, 7.4 | `test_route_api.py` | 로그(caplog)에 좌표·검색어 없음, Record 수 변화 없음, `.local-data`에 새 파일 없음 |
+| 2.1(AWS) | `test_weather_aws.py` | 관측소 표 읽기, 가까운 관측소 선택, 결측 건너뛰기, 대체 |
+| 2.8~2.10 | `test_weather_location.py` | 지역 찾기, 특보 코드, 격자, 조회 제한 |
+| 8 | `test_route_explain.py` | 사실 구성, 금지 표현, 사실에 없는 숫자, 템플릿 대체, 캐시 |
+| 9 | `test_reroute.py`, `test_tts.py` | 판단 세 가지, 변경 이유, 음성 합성 |
+| 10 | `test_guidance.py` | 회전 안내 |
 
 - 실제 엔진 확인: `data_pipeline/check_demo_scenario.py`로 시나리오 A 네 단계를 확인한다(수동, pytest 아님).
 - 브라우저 확인: 백엔드·프론트를 띄우고 설치된 Chrome을 원격 디버깅 모드로 연다. Node 22 내장 WebSocket으로 조작하고 화면을 캡처한다. 새 라이브러리는 쓰지 않는다.
@@ -653,7 +675,8 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 - **B**: 카카오 키가 없으므로 대체 흐름으로 확인한다. 안내 문구 → 데모 지점에서 광주역 선택 → 경로 표시. 키가 있을 때의 흐름은 MockTransport 테스트로 확인한다.
 - **C**: 기상청 키가 없으므로 대체 흐름으로 확인한다. "기상 정보를 가져오지 못했습니다" → 데모 모드로 전환 → 결과에 "실제 강수 미반영"
 - **D**: 70mm 이상에서 목적지를 '상무역(시나리오 D 시연용)'으로 정한다. 경고, 이유, 지나는 구역과 함께 가장 적게 지나는 경로가 나오는지 본다.
-- **알고리즘 교체**: hard_exclude, rerank로 바꿔 같은 화면에 표시되는지 본다.
+- **알고리즘 교체**: API의 strategy를 hard_exclude, rerank로 바꿔 같은 형식이 오는지 본다. 화면에는 고르는 곳이 없다.
+- **운행 중 변경**: 안내를 시작하고 출발 직후 시연 강수 75를 누른다. 기다리기, 바로 누르기, 유지, 강수 완화를 각각 본다.
 - **네트워크 기록**: 요청 URL에 좌표·검색어가 없고, 키가 응답에 없는지 본다.
 
 ## 16. 서버 배포 제약 (이번 범위 아님)
@@ -662,22 +685,22 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 
 - `frontend/package-lock.json`이 바뀌면(maplibre-gl 추가) 배포를 거부한다.
 - 서버 가상환경에는 pyvalhalla, shapely, pyproj와 타일이 없다.
-- `backend/app` 아래에서는 `.py`만 올리고, 경로에 `data`가 들어간 파일은 뺀다. 그래서 `strategies.yaml`과 `app/data/*`가 업로드되지 않는다.
+- `backend/app` 아래에서는 `.py`와 목록에 적힌 세 파일(`strategies.yaml`, `demo_points.json`, `risk_zones.geojson`)만 올린다.
 
 ## 17. 요구사항을 해석한 점
 
-1. 회피 실패 시 제외를 단계적으로 풀지 않고 baseline + 경고를 돌려준다(요구사항 4.9를 그대로 따름).
+1. 회피 실패 시 제외를 단계적으로 풀지 않고, 후보 중 '반드시 피함' 구역을 가장 적게 지나는 경로와 경고를 돌려준다(요구사항 4.9).
 2. 엔진 시간 제한 10초는 경로 요청 전체에 적용한다. 실행 중인 Valhalla 계산은 중단하지 못하고, 응답만 503으로 먼저 보낸다.
 3. 실제 엔진으로 시나리오 A를 확인하는 일은 pytest가 아니라 수동 스크립트로 한다(요구사항 5.7).
-4. 특보 현재 상태는 특보코드조회의 마지막 명령으로 판정한다(3.3절). 광주서부·광주동부 중 하나라도 발효면 광주 발효로 본다. 기상청 조회 기준은 광주 대표 1곳이다('팀 확정 필요'의 초안).
+4. 특보 현재 상태는 특보코드조회의 마지막 명령으로 판정한다(3.3절). 광주서부·광주동부 중 하나라도 발효면 광주 발효로 본다. 기상청 조회는 출발지와 차 위치 기준이다(20절).
 5. 중대경보는 경보와 같게 반영한다.
-6. 침수 이력 지형 등급(5.8)은 요구사항 4.5 표와 시연 확인 기준(35mm·55mm)과 다르다. 5.8 규칙이 우선한다. requirements.md는 사용자 확인 후 고친다.
+6. 침수 이력 지형 등급(5.8)을 요구사항 4.5 표와 시연 확인 기준에 반영했다.
 7. 요구사항의 'baseline: 최단 시간'과 '0단계: baseline과 같은 경로'는 공통 후보 중 가장 빠른 경로로 해석한다(5.7). 전역 최단은 보장하지 않는다.
-8. 지하차도 구역은 요구사항 3.4와 달리 실제 자료로 있다(4.5). 요구사항 3.1의 다각형은 지도 표시용으로 유지하고, 통과 판정과 엔진 제외는 터널 선과 제외 지점을 쓴다. requirements.md는 사용자 확인 후 고친다.
+8. 요구사항 3.1의 지하차도 다각형은 지도 표시용으로 유지하고, 통과 판정과 엔진 제외는 터널 선과 제외 지점을 쓴다(4.5).
 
 ## 18. AI 회피 경로 설명 (요구사항 8)
 
-- 흐름: 화면이 `POST /api/route` 결과를 먼저 그린 뒤 `POST /api/route/explain`을 따로 부른다(`frontend/src/components/RouteExplanation.tsx`). 설명은 경로 결과 카드 바로 아래에 붙는다. 설명 요청이 실패하면 설명 칸만 숨긴다.
+- 흐름: 화면이 `POST /api/route` 결과를 먼저 그린 뒤 `POST /api/route/explain`을 따로 부른다(`frontend/src/components/RouteExplanation.tsx`). 설명은 경로 결과 카드 안, 결과 문구와 경고 바로 아래에 붙는다. 설명 요청이 실패하면 설명 칸만 숨긴다.
 - 요청 본문: `{status, level, alert, route: {duration_s, zones: [{id, length_m}]}, baseline: {...}, fallback_engine}`. 좌표는 없다. `explanation.baseline_passed_zones`(baseline이 지나는 구역)를 추가해 일반 경로 쪽 구간을 채운다.
 - `app/route_explainer.py`:
   - `build_facts()`: 구역 ID를 서버 위험 구역 데이터로 풀어 이름·유형·근거를 붙인다. 모르는 ID는 422다. 목록은 길이 순 5개까지, 수는 전체를 센다. 소요시간은 분으로 반올림하고 추가 소요시간은 두 값의 차다.
@@ -693,7 +716,7 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 - 대체 계산: OpenRouteService 같은 대체 엔진은 아직 없다. `fallback_engine`은 항상 false이고, 나중에 대체 엔진을 붙이면 이 값을 채운다.
 - 테스트: `backend/tests/test_route_explain.py`. boto3를 가짜로 바꿔 실제 AWS 없이 돈다.
 
-## 19. 운행 중 경로 변경 요청 (요구사항 9)
+## 19. 운행 중 경로 변경 (요구사항 9)
 
 - 흐름: 강수 단계 상승 → `POST /api/route/reroute` → (`recommend`이면) 회전 안내 받기, 카드 표시 → `POST /api/route/reroute/explain` → 3초 뒤 자동 변경 또는 운전자 선택.
 - 판단: `backend/app/reroute.py`. 경로를 그린 알고리즘과 관계없이 `tiered_rain`으로 후보를 찾는다. `baseline`과 `rerank`는 피할 구역 목록이 없어 그대로 쓰면 "피할 구간 없음"으로 잘못 읽히기 때문이다. `decide()`는 그 경로와 남은 경로를 새 단계의 hard/soft 그룹으로 비교한다. soft만 줄어드는 경우는 알고리즘과 같은 기준(소요시간 + soft 벌점)으로 고른다.
@@ -702,7 +725,7 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 - 남은 시간: 화면의 남은 시간과 같은 값(전체 소요시간 × 남은 거리 비율)을 클라이언트가 보낸다. 구간 수는 서버가 남은 경로 좌표로 직접 계산한다. 좌표는 저장하거나 기록하지 않는다.
 - 설명: `route_explainer.reroute_facts`, `reroute_template`, `explain_reroute`. 요구사항 8과 같은 호출·검사·캐시 경로(`_write`)를 쓰고, 프롬프트만 따로 둔다. 추가 소요시간은 반올림한 분끼리 빼지 않고 초 차이에서 구해 화면의 값과 어긋나지 않게 한다.
 - 화면: `DriveMode`는 경로를 `Nav` 묶음 하나로 들고 `navRef`로 지도 루프에 넘긴다. 경로가 바뀌어도 지도를 다시 만들지 않고 선 데이터만 바꾼다. 지나온 길은 `travelledRef`로 이어 그린다. 요청 중에는 카메라를 위에서 본 전체 화면으로 옮기고 현재 경로는 호박색, 변경 경로는 청록색으로 그린다. `RerouteCard`가 3초를 세고 변경하며, 카드가 닫히면(유지, 강수 완화, 새 확인) 세기도 끝난다. AI 문장이 3초보다 늦으면 화면에 나오지 못하고 템플릿만 보인다.
-- 음성: `frontend/src/lib/speech.ts`. `POST /api/tts`(서버의 Supertonic, 새 패키지 없이 httpx로 호출)를 먼저 쓰고, 실패하면 `speechSynthesis`로 읽는다. 변경 요청은 `spokenRerouteSummary`의 짧은 문장만 읽고 AI 문장은 카드에만 둔다. 요약이 3초보다 길 수 있어 변경 뒤 안내는 끊지 않고 이어서 읽는다. 재탐색 알림과 요약만 읽으며 회전 안내는 읽지 않는다.
+- 음성: `frontend/src/lib/speech.ts`. `POST /api/tts`(서버의 Supertonic, 새 패키지 없이 httpx로 호출)를 먼저 쓰고, 실패하면 `speechSynthesis`로 읽는다. 경로 변경은 `spokenRerouteSummary`의 짧은 문장만 읽고 AI 문장은 카드에만 둔다. 요약이 3초보다 길 수 있어 변경 뒤 안내는 끊지 않고 이어서 읽는다. 재탐색 알림과 요약만 읽으며 회전 안내는 읽지 않는다.
 - 테스트: `backend/tests/test_reroute.py`. 실제 엔진 확인은 광주송정역 → 광주역의 13개 지점 × 35·55·75mm(39건, 공통 후보와 지하차도 22곳 적용 후): `recommend` 20, `no_better` 6, `keep` 13. 기본 경로가 35mm 회피 경로와 같아져 35mm는 모두 `keep`이고, 75mm는 전체 경로의 32%·40% 지점에서만 `no_better`다.
 
 ## 20. 날씨 기준 위치 (요구사항 2.8~2.10)
@@ -746,10 +769,3 @@ pyvalhalla 3.9.1 CLI는 Windows에서 실행 파일을 PATH에서 먼저 찾는�
 - 대체: `KMA_AWS_KEY`가 없거나, 응답이 실패·형식 오류이거나, 근처에 쓸 관측소가 없으면 초단기실황을 쓴다. 실패는 1분 동안 다시 시도하지 않는다.
 - 키: 지금은 AWS(`KMA_AWS_KEY`)와 초단기실황·특보(`KMA_SERVICE_KEY`)가 서로 다른 키다. 한 키에 모두 신청되면 두 항목에 같은 값을 넣으면 된다.
 - 표기: 화면은 관측 시각만 보여주고 관측소 이름은 표시하지 않는다. 관측소 값이므로 이 지점의 값은 아니다.
-
-## 24. 주차한 차 확인 (요구사항 10)
-
-- 흐름: `ParkingCard` → `POST /api/parking/check`(좌표는 본문에만) → 구역과 남은 시간. 경로 계산은 부르지 않고, 위험 구역 레이어는 읽기만 한다.
-- 구역: `backend/app/data/parking_zones_buk.geojson`(55구역: 상습 6, 보통 25, 단발 24). 서비스의 북구 침수 이력 중 2025년 기록 다수가 이 구역 밖이라 `flood_history`도 확인한다. 그 구역은 등급이 없어 기본 기준을 쓴다.
-- 강수: `context/parking_rain.py`. 기준이 광주 관측소(156) 비로 만들어져 지난 24시간은 그 관측소의 분 자료에서 시간별로 읽는다(`KMA_AWS_KEY`, 5분 캐시). 예보는 차가 있는 격자의 초단기예보다(`KMA_SERVICE_KEY`, 10분 캐시). 기상청에는 격자 번호만 보낸다.
-- 한계: 기준은 17개 침수일에 맞춰 만들고 같은 날들로 확인했다. 날짜 단위 기록이라 "N분"은 검증되지 않은 어림값이고, 2025년 침수는 기준에 들어 있지 않다. 비는 한 관측소 값이다.

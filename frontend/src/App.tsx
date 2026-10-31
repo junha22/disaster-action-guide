@@ -2,7 +2,6 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import { ArrowUpDown, Info, Loader2 } from 'lucide-react'
 
 import DriveMode, { type DriveExit } from '@/components/DriveMode'
-import ParkingCard from '@/components/ParkingCard'
 import RoutePanel from '@/components/RoutePanel'
 import RouteResultCard from '@/components/RouteResultCard'
 import SearchBar from '@/components/SearchBar'
@@ -391,8 +390,6 @@ function App() {
               }} error={routeError} />
           </div>
 
-          <ParkingCard demoPoints={demoPoints} bbox={config?.service_area_bbox ?? null} />
-
           <footer className="glass-card space-y-1.5 text-xs leading-5" role="note">
             <p className="text-muted-foreground">
               비가 많이 올수록 지하차도와 침수 이력 도로를 단계적으로 피하는 자동차 경로입니다.
@@ -406,7 +403,7 @@ function App() {
               {dummyNotice(zones, config?.zone_types) ? ` · ${dummyNotice(zones, config?.zone_types)}` : ''}.
             </p>
             <p className="text-muted-foreground">
-              출발지·목적지, 주차 위치와 검색어는 서버에 저장하지 않습니다. 지도 타일은 OpenFreeMap에서 받습니다.
+              출발지·목적지와 검색어는 서버에 저장하지 않습니다. 지도 타일은 OpenFreeMap에서 받습니다.
             </p>
           </footer>
         </div>

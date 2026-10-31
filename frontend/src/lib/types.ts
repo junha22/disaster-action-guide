@@ -150,36 +150,6 @@ export interface RouteResult {
   weather: RouteWeather
 }
 
-// POST /api/parking/check: flood records at the parked car and how close the rain is to past flood days.
-export interface ParkingZone {
-  kind: 'buk_records' | 'service_records'
-  name: string
-  grade: string | null
-  records: number | null
-  flood_dates: string[]
-}
-
-export interface ParkingRain {
-  minutes: number | null
-  sum_3h: number
-  sum_24h: number
-  need_3h: number
-  wet_24h: number
-  wet_3h: number
-  forecast_hours: number
-  forecast_peak_mm: number | null
-}
-
-export interface ParkingCheck {
-  demo: boolean
-  zone: ParkingZone | null
-  status: 'known' | 'unknown'
-  observed_at: string | null
-  missing_hours: number
-  forecast_ok: boolean
-  rain: ParkingRain | null
-}
-
 // POST /api/route/explain: finished facts only, no coordinates (requirement 8).
 export interface ExplainSide {
   duration_s: number

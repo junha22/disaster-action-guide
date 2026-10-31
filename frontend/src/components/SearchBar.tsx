@@ -75,11 +75,11 @@ export default function SearchBar({ id, label, value, onChange, demoPoints, bbox
         setLocating(false)
         const { longitude: lon, latitude: lat, accuracy } = position.coords
         if (bbox && !inBox(lon, lat, bbox)) {
-          setHint(`현재 위치가 광주광역시 밖입니다. ${label}는 검색으로 정하세요.`)
+          setHint('현재 위치가 광주광역시 밖입니다. 검색으로 출발지를 정하세요.')
           return
         }
         choose({ id: 'gps', name: '현재 위치', address: '', lon, lat, selectable: true, reason: null, source: 'gps' })
-        if (accuracy > COARSE_ORIGIN_M) setHint(`위치 오차가 약 ${formatDistance(accuracy)}입니다. ${label}가 실제와 다를 수 있습니다.`)
+        if (accuracy > COARSE_ORIGIN_M) setHint(`위치 오차가 약 ${formatDistance(accuracy)}입니다. 출발지가 실제와 다를 수 있습니다.`)
       },
       () => {
         setLocating(false)
