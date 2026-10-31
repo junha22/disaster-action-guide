@@ -51,8 +51,10 @@ def test_only_real_public_data_is_shipped():
 
 
 def test_real_flood_history_zones_are_included():
-    real = [z for z in RiskLayer.from_geojson(DATA).active(["flood_history"]) if not z.is_dummy]
-    assert len(real) == 657
+    layer = RiskLayer.from_geojson(DATA)
+    real = [z for z in layer.zones if z.type == "flood_history" and not z.is_dummy]
+    assert len(real) == 935
+    assert len(layer.active(["flood_history"])) == 907
     assert all(z.id.startswith("FLD-") for z in real)
 
 
@@ -61,7 +63,7 @@ def test_real_flood_zones_have_terrain_tiers():
     layer = RiskLayer.from_geojson(DATA)
     real = [z for z in layer.active(["flood_history"]) if not z.is_dummy]
     counts = {t: sum(z.tier == t for z in real) for t in ("high", "normal", "raised")}
-    assert counts == {"high": 126, "normal": 416, "raised": 115}  # pipeline.yaml: low_pct < 15 -> high
+    assert counts == {"high": 170, "normal": 574, "raised": 163}  # 907 active zones; low_pct < 15 -> high
     assert all(z.tier_reason for z in real)
     assert all(z.group == f"flood_history.{z.tier}" for z in real)
     # zones without elevation are never put in a lower tier

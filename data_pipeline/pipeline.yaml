@@ -23,7 +23,7 @@ flood_tiers:
 sources:
   # Real data only. The hand-drawn dummy zones (sources/dummy_seed.json) were removed on
   # 2026-10-30; riverside has no zones until real data is added.
-  # 광주 북구·서구·광산구 침수 피해 기록 2021~2025 -> 657 flood_history polygons, with DEM
+  # 광주 5개 구 침수 피해 기록 2021~2025 -> 935 flood_history polygons, with DEM
   # elevation (see risk_zones_guide(DEM).md at the repository root).
   - {reader: flood_zone_geojson, path: sources/gwangju_flood_zones.geojson}
   # Underpass list (points) tied to OSM tunnels (design.md 4.5). sources/osm_tunnels.geojson comes
