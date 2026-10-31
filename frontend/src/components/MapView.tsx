@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { LngLatBounds, MapLibreMap, Marker, NavigationControl } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
-import { retryStyleOnFailure, type MapTheme } from '@/lib/mapTheme'
+import { applyKoreanLabels, retryStyleOnFailure, type MapTheme } from '@/lib/mapTheme'
 import '@/lib/mapWorker'
 
 import RiskLayer from '@/components/RiskLayer'
@@ -29,6 +29,7 @@ interface Props {
   config: Pick<AppConfig, 'zone_types' | 'zone_groups'> | null
   highlightGroups: ZoneGroup[]
   passedZoneIds: string[]
+  avoidedZoneIds: string[]
   // True when a result card covers the left side of the map.
   floatingCard: boolean
   route: LineGeometry | null
@@ -52,7 +53,7 @@ function setLines(map: MapLibreMap, id: string, lines: LineGeometry[]) {
 }
 
 export default function MapView(props: Props) {
-  const { theme, zones, config, highlightGroups, passedZoneIds, floatingCard, route, baseline, alternatives, showBaseline,
+  const { theme, zones, config, highlightGroups, passedZoneIds, avoidedZoneIds, floatingCard, route, baseline, alternatives, showBaseline,
     origin, destination } = props
   const container = useRef<HTMLDivElement>(null)
   const [map, setMap] = useState<MapLibreMap | null>(null)
@@ -62,6 +63,7 @@ export default function MapView(props: Props) {
     const instance = new MapLibreMap({ container: container.current, style: theme.styleUrl, center: GWANGJU, zoom: 11.2 })
     instance.addControl(new NavigationControl({ showCompass: false }), 'top-right')
     retryStyleOnFailure(instance, theme.styleUrl)
+    instance.on('style.load', () => applyKoreanLabels(instance))
     instance.on('load', () => {
       for (const line of lineLayers(theme)) {
         instance.addSource(line.id, { type: 'geojson', data: collection([]) })
@@ -126,7 +128,7 @@ export default function MapView(props: Props) {
       <div ref={container} className="h-full w-full" aria-label="경로 지도" role="region" />
       {map && config && (
         <RiskLayer map={map} zones={zones} zoneTypes={config.zone_types} zoneGroups={config.zone_groups}
-          highlightGroups={highlightGroups} passedZoneIds={passedZoneIds} />
+          highlightGroups={highlightGroups} passedZoneIds={passedZoneIds} avoidedZoneIds={avoidedZoneIds} />
       )}
     </div>
   )

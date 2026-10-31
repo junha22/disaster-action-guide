@@ -143,6 +143,8 @@ export default function RouteResultCard({ config, result, showBaseline, onShowBa
         </div>
       )}
 
+      <RouteExplanation result={result} />
+
       {/* Safety information, so it stays outside the fold whatever else is collapsed. */}
       {toAvoid.length > 0 && <PassedLine label={hasRules ? '지나는 피할 구역' : '지나는 위험 구역'} zones={toAvoid} config={config} />}
       {others.length > 0 && <PassedLine label="이번 단계에서 피하지 않는 위험 구역" zones={others} config={config} />}
@@ -162,8 +164,6 @@ export default function RouteResultCard({ config, result, showBaseline, onShowBa
         {starting ? <Loader2 className="animate-spin" /> : <Navigation />}
         {starting ? '안내 준비 중…' : '안내 시작 (시연 주행)'}
       </Button>
-
-      <RouteExplanation result={result} />
 
       <details className="group/more">
         <summary className="flex cursor-pointer list-none items-center gap-1 text-xs font-medium text-muted-foreground">

@@ -15,7 +15,7 @@ import {
 } from '@/lib/drive'
 import { formatDistance, formatDuration, signed } from '@/lib/format'
 import { rainLevel } from '@/lib/level'
-import { mapThemeFor, retryStyleOnFailure } from '@/lib/mapTheme'
+import { applyKoreanLabels, mapThemeFor, retryStyleOnFailure } from '@/lib/mapTheme'
 import '@/lib/mapWorker'
 import { avoidCount, avoidIds } from '@/lib/reroute'
 import { weatherScene, type SceneKind, type SceneSpec } from '@/lib/scene'
@@ -65,7 +65,7 @@ const BEARING_EASE = 0.12
 const NARROW_WIDTH_PX = 760
 // Same steps as the demo buttons on the route screen: one per rain level.
 const DEMO_RAIN_MM = [0, 35, 55, 75]
-const KMA_CHECK_MS = 10 * 60 * 1000
+const KMA_CHECK_MS = 2 * 60 * 1000
 // Too close to the destination for a new route to mean anything.
 const MIN_REROUTE_LEFT_M = 300
 const NOTICE_MS = 9000
@@ -304,7 +304,7 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
     applyRain({ rn1_mm: mm, alert: 'none' }, true)
   }
 
-  // Real rain is re-read at the car while driving, unless the demo buttons took over. The server caches it for 10 minutes.
+  // Real rain is re-read at the car while driving, unless the demo buttons took over.
   const followsKma = result.weather.source === 'kma'
   useEffect(() => {
     if (!followsKma) return
@@ -389,6 +389,7 @@ export default function DriveMode({ result, steps, scene, zones, destination, le
     })
     // Not 'load': that waits for every tile, which a moving camera can delay for a long time.
     map.on('style.load', () => {
+      applyKoreanLabels(map)
       for (const id of ['drive-done', 'drive-left']) map.addSource(id, { type: 'geojson', data: lineFeature(first.track.coordinates) })
       map.addSource('drive-preview', { type: 'geojson', data: lineFeature([]) })
       const zoneData = zones ?? { type: 'FeatureCollection', features: [] }

@@ -1,6 +1,8 @@
 """KMA weather for a place in Gwangju or Jeonnam (requirement 2, design.md 3.2-3.4).
 
-- 1-hour rainfall (RN1) from the ultra-short-term observation API at the place's grid cell.
+- Rainfall of the last 60 minutes from the nearest per-minute AWS station when KMA_AWS_KEY is set
+  (weather_aws.py), otherwise or on failure the hourly RN1 of the ultra-short-term observation API
+  at the place's grid cell.
 - Heavy-rain alert filtered by the region's alert-area codes: the warning-code API on data.go.kr, or
   the current-alert list (wrn_now_data) on KMA API Hub.
 - Results cached in memory per grid cell and region for 10 minutes (failures for 1 minute).
@@ -25,6 +27,7 @@ from urllib.parse import unquote
 
 import httpx
 
+from .weather_aws import AwsFormatError, Station, StationRain, nearest_rain, parse_minute_table, parse_stations
 from .weather_regions import DEFAULT_REGION, GWANGJU_AREA_CODES, LonLat, grid_of, region_for
 
 KST = timezone(timedelta(hours=9))
@@ -32,6 +35,8 @@ NCST_URL = "https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getUltraSr
 WARNING_URL = "https://apis.data.go.kr/1360000/WthrWrnInfoService/getPwnCd"
 HUB_NCST_URL = "https://apihub.kma.go.kr/api/typ02/openApi/VilageFcstInfoService_2.0/getUltraSrtNcst"
 HUB_ALERT_URL = "https://apihub.kma.go.kr/api/typ01/url/wrn_now_data.php"
+AWS_MINUTE_URL = "https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min"
+AWS_STATIONS_URL = "https://apihub.kma.go.kr/api/typ01/url/stn_inf.php"
 # API Hub keys are 22 URL-safe characters. Portal keys are longer, or contain %, + or =.
 HUB_KEY = re.compile(r"[A-Za-z0-9_-]{22}")
 GRID = grid_of(DEFAULT_REGION.lon, DEFAULT_REGION.lat)  # (58, 74)
@@ -47,6 +52,9 @@ ACTIVE_COMMANDS = {1, 3, 6, 7}  # 발표, 연장, 정정, 변경발표 (2 해제
 ALERT_DAYS = 3
 TIMEOUT_S = 5.0
 TTL_S = 600.0
+# The stations renew every minute: a shorter wait is what lets a sudden downpour be noticed.
+AWS_TTL_S = 120.0
+AWS_STATIONS_TTL_S = 86400.0
 FAIL_TTL_S = 60.0
 UNAVAILABLE = "기상 정보를 가져오지 못했습니다"
 BUSY = "기상 정보 요청이 많아 가져오지 못했습니다"
@@ -73,6 +81,7 @@ class WeatherSnapshot:
     region: str = DEFAULT_REGION.name
     grid: tuple[int, int] = GRID
     routable: bool = True  # routes and risk zones cover Gwangju only
+    station: str | None = None  # the AWS station read, when the rain came from one
 
 
 def unavailable_snapshot() -> WeatherSnapshot:
@@ -165,13 +174,18 @@ def parse_hub_alert(items: Any, codes: frozenset[str] = GWANGJU_AREA_CODES) -> t
 
 class KmaWeatherService:
     def __init__(self, *, key: Callable[[], str | None] = lambda: os.environ.get("KMA_SERVICE_KEY"),
+                 aws_key: Callable[[], str | None] = lambda: os.environ.get("KMA_AWS_KEY"),
                  transport: httpx.BaseTransport | None = None, clock: Callable[[], float] = time.monotonic,
                  now: Callable[[], datetime] = lambda: datetime.now(KST)):
-        self._key, self._transport, self._clock, self._now = key, transport, clock, now
+        self._key, self._aws_key, self._transport, self._clock, self._now = key, aws_key, transport, clock, now
         self._lock = threading.Lock()  # guards the fields below, and is never held across the network
         self._cached: OrderedDict[tuple, tuple[WeatherSnapshot, float]] = OrderedDict()
         self._place_locks: dict[tuple, threading.Lock] = {}
         self._readings: deque[float] = deque()
+        self._aws_lock = threading.Lock()
+        self._aws_stations: tuple[list[Station], float] | None = None
+        self._aws_table: tuple[dict[str, tuple[datetime, float]] | None, float] | None = None
+        self.aws_fetch_count = 0
         self._alert_lock = threading.Lock()
         self._alert_payload: tuple[Any, float] | None = None  # one list serves every region
         self.fetch_count = 0
@@ -195,18 +209,76 @@ class KmaWeatherService:
                 fresh = self._fresh(key)  # another request may just have read this place
                 if fresh is not None:
                     return fresh
-                if point is not None and not self._take_reading():
-                    hit = self._cached.get(key)
-                    if hit is not None and hit[0].available:
-                        return hit[0]
-                    return replace(unavailable_snapshot(), message=BUSY, **place)
-            snapshot = replace(self._fetch(grid, region.alert_codes), **place)
+            lon, lat = point or (DEFAULT_REGION.lon, DEFAULT_REGION.lat)
+            rain = self._aws_rain(lon, lat)  # one shared table: no budget needed
+            if rain is not None:
+                snapshot = replace(self._from_station(rain, region.alert_codes), **place)
+                ttl = AWS_TTL_S
+            else:
+                with self._lock:
+                    if point is not None and not self._take_reading():
+                        hit = self._cached.get(key)
+                        if hit is not None and hit[0].available:
+                            return hit[0]
+                        return replace(unavailable_snapshot(), message=BUSY, **place)
+                snapshot = replace(self._fetch(grid, region.alert_codes), **place)
+                ttl = TTL_S if snapshot.available else FAIL_TTL_S
             with self._lock:
-                self._cached[key] = (snapshot, self._clock() + (TTL_S if snapshot.available else FAIL_TTL_S))
+                self._cached[key] = (snapshot, self._clock() + ttl)
                 self._cached.move_to_end(key)
                 while len(self._cached) > CACHE_SIZE:
                     self._place_locks.pop(self._cached.popitem(last=False)[0], None)
             return snapshot
+
+    def _aws_rain(self, lon: float, lat: float) -> StationRain | None:
+        """None sends the caller to the hourly observation: no key, no answer, or no station nearby."""
+        key = (self._aws_key() or "").strip()
+        if not key:
+            return None
+        with self._aws_lock:
+            now = self._clock()
+            if self._aws_table is None or now >= self._aws_table[1]:
+                try:
+                    self._aws_table = (self._read_aws(key, now), now + AWS_TTL_S)
+                except (KmaError, AwsFormatError):
+                    self._aws_table = (None, now + FAIL_TTL_S)
+            table = self._aws_table[0]
+            stations = self._aws_stations[0] if self._aws_stations else []
+        return nearest_rain(stations, table, lon, lat, self._now()) if table else None
+
+    def _read_aws(self, key: str, now: float) -> dict[str, tuple[datetime, float]]:
+        with httpx.Client(timeout=TIMEOUT_S, transport=self._transport) as client:
+            if self._aws_stations is None or now >= self._aws_stations[1]:
+                text = self._get_text(client, AWS_STATIONS_URL, {
+                    "inf": "AWS", "tm": self._now().astimezone(KST).strftime("%Y%m%d%H%M"), "help": 0, "authKey": key})
+                self._aws_stations = (list(parse_stations(text).values()), now + AWS_STATIONS_TTL_S)
+            self.aws_fetch_count += 1
+            # No time asked for: the newest minutes have not arrived yet and read as missing everywhere.
+            return parse_minute_table(self._get_text(client, AWS_MINUTE_URL, {"stn": 0, "disp": 0, "help": 0, "authKey": key}))
+
+    def _get_text(self, client: httpx.Client, url: str, params: dict[str, Any]) -> str:
+        try:
+            response = client.get(url, params=params)
+        except httpx.HTTPError:
+            raise KmaError() from None
+        if response.status_code != 200:
+            raise KmaError()
+        return response.content.decode("euc-kr", errors="replace")
+
+    def _from_station(self, rain: StationRain, codes: frozenset[str]) -> WeatherSnapshot:
+        snapshot = WeatherSnapshot(True, rain.rn60_mm, "none", ALERT_LABELS["none"], "ok", rain.observed_at.isoformat(), None,
+                                   station=rain.station)
+        failed = replace(snapshot, alert_status="failed", alert_label="특보 확인 실패")
+        raw = (self._key() or "").strip()
+        if not raw:
+            return failed
+        key = unquote(raw) if "%" in raw else raw
+        with httpx.Client(timeout=TIMEOUT_S, transport=self._transport) as client:
+            try:
+                alert, label = self._fetch_alert(client, key, bool(HUB_KEY.fullmatch(key)), codes)
+            except KmaError:
+                return failed
+        return replace(snapshot, alert=alert, alert_label=label)
 
     def _fresh(self, key: tuple) -> WeatherSnapshot | None:
         hit = self._cached.get(key)
@@ -248,7 +320,9 @@ class KmaWeatherService:
                     "serviceKey": key, "pageNo": 1, "numOfRows": 1000, "dataType": "JSON",
                     "fromTmFc": (today - timedelta(days=ALERT_DAYS - 1)).strftime("%Y%m%d"),
                     "toTmFc": today.strftime("%Y%m%d"), "warningType": HEAVY_RAIN})
-            self._alert_payload = (payload, self._clock() + TTL_S)
+            # Alerts keep up with the rain when the rain is read every couple of minutes.
+            ttl = AWS_TTL_S if (self._aws_key() or "").strip() else TTL_S
+            self._alert_payload = (payload, self._clock() + ttl)
             return payload
 
     def _fetch_alert(self, client: httpx.Client, key: str, is_hub: bool, codes: frozenset[str]) -> tuple[str, str]:

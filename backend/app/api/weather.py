@@ -32,7 +32,7 @@ def _answer(s: WeatherSnapshot, config: AppConfig) -> dict:
     return {"available": s.available, "source": "kma" if s.available else "unavailable",
             "rn1_mm": s.rn1_mm, "alert": s.alert, "alert_label": s.alert_label, "alert_status": s.alert_status,
             "level": level, "observed_at": s.observed_at, "grid": {"nx": s.grid[0], "ny": s.grid[1]},
-            "region": s.region, "routable": s.routable, "message": s.message}
+            "region": s.region, "routable": s.routable, "station": s.station, "message": s.message}
 
 
 @router.get("/weather")

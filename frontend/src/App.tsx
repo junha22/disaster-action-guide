@@ -35,8 +35,8 @@ interface WeatherChoice {
 const DEMO_ROUTE = { origin: '광주송정역', destination: '광주역' }
 const CLOCK_CHECK_MS = 5 * 60 * 1000
 const DEFAULT_WEATHER_PLACE = 'gwangju'
-// The server keeps a reading for 10 minutes, so asking more often shows nothing new.
-const WEATHER_REFRESH_MS = 10 * 60 * 1000
+// The stations renew every minute and the server keeps a table for 2 minutes.
+const WEATHER_REFRESH_MS = 2 * 60 * 1000
 // One forecast grid cell. A position this rough can land in the wrong cell or county.
 const COARSE_WEATHER_M = 5000
 
@@ -272,6 +272,7 @@ function App() {
 
   const alternatives = useMemo(() => result?.alternatives.map(a => a.geometry) ?? [], [result])
   const passedZoneIds = useMemo(() => result?.explanation.passed_zones.map(z => z.id) ?? [], [result])
+  const avoidedZoneIds = useMemo(() => result?.explanation.avoided_zones.map(z => z.id) ?? [], [result])
   const checkedAt = zones?.metadata.data_checked_at ?? '-'
 
   const sceneRain = choice.demoMode ? choice.rain : (weather?.available ? weather.rn1_mm ?? 0 : 0)
@@ -336,7 +337,7 @@ function App() {
         <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">
           <Loader2 className="mr-2 size-4 animate-spin" />지도를 불러오는 중</div>}>
           <MapView key={mapTheme.name} theme={mapTheme} zones={zones} config={config ?? null} highlightGroups={highlightGroups}
-            passedZoneIds={passedZoneIds} floatingCard={isWide && Boolean(result)}
+            passedZoneIds={passedZoneIds} avoidedZoneIds={avoidedZoneIds} floatingCard={isWide && Boolean(result)}
             route={result?.route.geometry ?? null} baseline={result?.baseline.geometry ?? null}
             alternatives={alternatives} showBaseline={showBaseline} origin={origin} destination={destination} />
         </Suspense>
@@ -383,6 +384,9 @@ function App() {
                 <Play />시연 경로 보기 · {DEMO_ROUTE.origin} → {DEMO_ROUTE.destination}
               </Button>
             )}
+            <p className="text-xs leading-5 text-muted-foreground">
+              운행 중 비가 강해지면 남은 길을 다시 판단하고, 왜 바꾸는지 설명해요.
+            </p>
             <section className="route-fields" aria-label="출발지와 목적지">
               <SearchBar id="origin" label="출발지" value={origin} onChange={pick(setOrigin)} demoPoints={demoPoints}
                 bbox={config?.service_area_bbox ?? null} allowCurrentLocation />

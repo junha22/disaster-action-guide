@@ -16,7 +16,7 @@ export interface MapTheme {
 const THEMES: Record<MapThemeName, MapTheme> = {
   light: {
     name: 'light',
-    styleUrl: 'https://tiles.openfreemap.org/styles/liberty',
+    styleUrl: 'https://tiles.openfreemap.org/styles/positron',
     baseline: '#334155',
     alternatives: '#7c3aed',
     travelled: '#64748b',
@@ -34,6 +34,14 @@ const THEMES: Record<MapThemeName, MapTheme> = {
 
 export function mapThemeFor(time: TimeOfDay): MapTheme {
   return THEMES[time === 'night' ? 'dark' : 'light']
+}
+
+// The styles print latin and local names together. Road numbers (shields) keep their own field.
+export function applyKoreanLabels(map: MapLibreMap) {
+  for (const layer of map.getStyle().layers) {
+    if (layer.type !== 'symbol' || !JSON.stringify(layer.layout?.['text-field'] ?? '').includes('name')) continue
+    map.setLayoutProperty(layer.id, 'text-field', ['coalesce', ['get', 'name:ko'], ['get', 'name:nonlatin'], ['get', 'name']])
+  }
 }
 
 const STYLE_RETRIES = 3

@@ -62,10 +62,12 @@ export default function WeatherPanel(props: Props) {
   const choosesPlace = regions.length > 0 && (!demoMode || !available)
   const regionGroups = [...new Set(regions.map(r => r.group))]
   const outsideRoutes = !demoMode && weather?.routable === false
+  // The big card is for rain. On a dry day it steps aside; controls and warnings stay.
+  const calm = level === 0 && activeAlert === 'none'
   const routeOtherPlace = !demoMode && routeWeather?.source === 'kma' && routeWeather.level !== weather?.level
 
   return (
-    <section className="weather-hero" aria-labelledby="weather-title" data-kind={scene.kind} data-time={scene.time}>
+    <section className="weather-hero" aria-labelledby="weather-title" data-kind={scene.kind} data-time={scene.time} data-calm={calm}>
       <WeatherCanvas spec={scene} variant="hero" />
       <div className="hero-scrim" aria-hidden="true" />
 
@@ -84,7 +86,7 @@ export default function WeatherPanel(props: Props) {
           </div>
         </div>
 
-        <div className="mt-7 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+        <div className={`${calm ? 'mt-2.5' : 'mt-7'} flex flex-wrap items-center gap-x-2 gap-y-1 text-xs`}>
           <span className="flex items-center gap-1 text-white/90">
             <MapPin className="size-3.5" />
             {choosesPlace ? (
@@ -104,28 +106,37 @@ export default function WeatherPanel(props: Props) {
           {(loading || locating) && <Loader2 className="size-4 animate-spin text-white/80" aria-label="불러오는 중" />}
           {!loading && (demoMode
             ? <span className="demo-pill">데모 값 · 실제 기상 아님</span>
-            : <span className="text-white/80">기상청 · {formatObserved(weather?.observed_at ?? null)}</span>)}
+            : <span className="text-white/80">
+              기상청{weather?.station ? ` ${weather.station} 관측소` : ''} · {formatObserved(weather?.observed_at ?? null)}
+            </span>)}
           {dummyZonesNotice && <Badge variant="outline" className="demo-pill !h-auto font-normal">{dummyZonesNotice}</Badge>}
         </div>
 
-        <div className="mt-1 flex items-end justify-between gap-3">
-          <h2 id="weather-title" className="weather-title">{scene.title}</h2>
-          <p className="shrink-0 text-right leading-none" aria-live="polite">
-            <span className="weather-number">{rainShown}</span>
-            <span className="ml-1 text-sm text-white/85">mm/h</span>
-          </p>
-        </div>
+        {calm ? (
+          <div className="mt-1.5 flex items-baseline justify-between gap-3 text-sm">
+            <h2 id="weather-title" className="weather-title-calm">{scene.title} <span>· 강수 0단계</span></h2>
+            <p className="shrink-0 tabular-nums text-white/85" aria-live="polite">{rainShown} mm/h</p>
+          </div>
+        ) : (
+          <div className="mt-1 flex items-end justify-between gap-3">
+            <h2 id="weather-title" className="weather-title">{scene.title}</h2>
+            <p className="shrink-0 text-right leading-none" aria-live="polite">
+              <span className="weather-number">{rainShown}</span>
+              <span className="ml-1 text-sm text-white/85">mm/h</span>
+            </p>
+          </div>
+        )}
 
         {locationNote && <p role="status" className="mt-1 text-xs font-medium text-amber-200">{locationNote}</p>}
 
-        {level !== null && (
+        {level !== null && !calm && (
           <p className="mt-2 text-sm text-white/95">
             <strong>강수 {level}단계</strong> · {outsideRoutes ? '경로 안내는 광주 안에서만 돼요' : `피하는 구역: ${avoidText}`}
             {activeAlert !== 'none' && <strong className="ml-1.5 text-amber-300">{ALERT_LABELS[activeAlert]}</strong>}
           </p>
         )}
 
-        {!loading && available && !demoMode && (
+        {!loading && available && !demoMode && (!calm || weather?.alert_status === 'failed') && (
           <p className={`mt-1.5 text-xs ${weather?.alert_status === 'failed' ? 'font-medium text-amber-200' : 'text-white/85'}`}>
             호우 특보: {weather?.alert_label}
           </p>

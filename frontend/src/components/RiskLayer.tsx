@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { Popup, type ExpressionSpecification, type MapLibreMap, type MapLayerMouseEvent } from 'maplibre-gl'
 
 import { typeCoverage } from '@/lib/level'
@@ -10,8 +10,16 @@ const FILL = 'risk-zones-fill'
 const OUTLINE = 'risk-zones-outline'
 const DOT_SOURCE = 'risk-zones-dots'
 const DOTS = 'risk-zones-dots'
+const HEAT = 'risk-zones-heat'
+// Underpass dots go under the route line: a road passing over a tunnel must not look like driving through it.
+const UNDER_DOTS = 'risk-zones-dots-under'
 // Most zones are too small to see when the whole city is in view, so they also get a dot until this zoom.
 const DOT_MAX_ZOOM = 14.5
+// From afar, hundreds of flood records read as a distribution. Close up, each zone is drawn and can be opened.
+const ZONES_FROM_ZOOM = 12.5
+const ZONES_FULL_ZOOM = 14
+const HEAT_COLORS: ExpressionSpecification = ['interpolate', ['linear'], ['heatmap-density'],
+  0, 'rgba(245, 158, 11, 0)', 0.3, 'rgba(245, 158, 11, 0.35)', 0.7, 'rgba(234, 138, 6, 0.65)', 1, 'rgba(217, 119, 6, 0.85)']
 const EMPTY = { type: 'FeatureCollection' as const, features: [] }
 // Route layers are added by MapView first; zones go underneath them.
 const BELOW = 'route-alternatives'
@@ -23,6 +31,7 @@ interface Props {
   zoneGroups: AppConfig['zone_groups']
   highlightGroups: ZoneGroup[]
   passedZoneIds: string[]
+  avoidedZoneIds: string[]
 }
 
 function zoneDots(zones: ZoneFeatureCollection) {
@@ -93,13 +102,27 @@ function popupContent(p: ZoneProperties, typeLabel: string, tierLabel: string | 
   return root
 }
 
-export default function RiskLayer({ map, zones, zoneTypes, zoneGroups, highlightGroups, passedZoneIds }: Props) {
+export default function RiskLayer({ map, zones, zoneTypes, zoneGroups, highlightGroups, passedZoneIds, avoidedZoneIds }: Props) {
   const notice = dummyNotice(zones, zoneTypes)
+  // What the map may hide from afar stays out of reach too: an invisible zone must not open a popup.
+  const markedIds = useRef<string[]>([])
   useEffect(() => {
     if (!map.getSource(SOURCE)) {
       map.addSource(SOURCE, { type: 'geojson', data: EMPTY })
       map.addSource(DOT_SOURCE, { type: 'geojson', data: EMPTY })
       const before = map.getLayer(BELOW) ? BELOW : undefined
+      map.addLayer({
+        id: HEAT, type: 'heatmap', source: DOT_SOURCE, maxzoom: DOT_MAX_ZOOM, filter: ['==', ['get', 'type'], 'flood_history'],
+        paint: {
+          'heatmap-color': HEAT_COLORS,
+          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 10, 0.5, 14, 1.2],
+          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 10, 12, 14, 30],
+        },
+      }, before)
+      map.addLayer({
+        id: UNDER_DOTS, type: 'circle', source: DOT_SOURCE, maxzoom: DOT_MAX_ZOOM,
+        paint: { 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 0, 'circle-radius': 3.5, 'circle-opacity': 0.95 },
+      }, before)
       map.addLayer({ id: FILL, type: 'fill', source: SOURCE }, before)
       map.addLayer({ id: OUTLINE, type: 'line', source: SOURCE, paint: { 'line-width': 1.5 } }, before)
       map.addLayer({
@@ -116,27 +139,35 @@ export default function RiskLayer({ map, zones, zoneTypes, zoneGroups, highlight
     map.setPaintProperty(FILL, 'fill-color', colors)
     map.setPaintProperty(OUTLINE, 'line-color', colors)
     map.setPaintProperty(DOTS, 'circle-color', colors)
+    map.setPaintProperty(UNDER_DOTS, 'circle-color', colors)
+
+    function shown(event: MapLayerMouseEvent) {
+      const feature = event.features?.[0]
+      if (!feature) return null
+      const props = feature.properties as unknown as ZoneProperties
+      const hidden = map.getZoom() < ZONES_FROM_ZOOM && props.type !== 'underpass' && !markedIds.current.includes(props.id)
+      return hidden ? null : props
+    }
 
     function onClick(event: MapLayerMouseEvent) {
-      const feature = event.features?.[0]
-      if (!feature) return
-      const props = feature.properties as unknown as ZoneProperties
+      const props = shown(event)
+      if (!props) return
       const label = zoneTypes[props.type]?.label ?? props.type
       const tierLabel = zoneGroups[props.group]?.tier_label ?? null
       new Popup({ maxWidth: '280px' }).setLngLat(event.lngLat)
         .setDOMContent(popupContent(props, label, tierLabel)).addTo(map)
     }
-    const enter = () => { map.getCanvas().style.cursor = 'pointer' }
+    const enter = (event: MapLayerMouseEvent) => { map.getCanvas().style.cursor = shown(event) ? 'pointer' : '' }
     const leave = () => { map.getCanvas().style.cursor = '' }
-    for (const layer of [FILL, DOTS]) {
+    for (const layer of [FILL, DOTS, UNDER_DOTS]) {
       map.on('click', layer, onClick)
-      map.on('mouseenter', layer, enter)
+      map.on('mousemove', layer, enter)
       map.on('mouseleave', layer, leave)
     }
     return () => {
-      for (const layer of [FILL, DOTS]) {
+      for (const layer of [FILL, DOTS, UNDER_DOTS]) {
         map.off('click', layer, onClick)
-        map.off('mouseenter', layer, enter)
+        map.off('mousemove', layer, enter)
         map.off('mouseleave', layer, leave)
       }
     }
@@ -155,14 +186,26 @@ export default function RiskLayer({ map, zones, zoneTypes, zoneGroups, highlight
     // Groups avoided at the current level (design.md 5.8) and zones the route passes are drawn strongly,
     // the others faintly (requirement 3.6). A passed zone must stand out even when it is not avoided.
     const onRoute: ExpressionSpecification = ['in', ['get', 'id'], ['literal', passedZoneIds]]
+    const avoided: ExpressionSpecification = ['in', ['get', 'id'], ['literal', avoidedZoneIds]]
+    const underpass: ExpressionSpecification = ['==', ['get', 'type'], 'underpass']
     const strong: ExpressionSpecification = ['any', ['in', ['get', 'group'], ['literal', highlightGroups]], onRoute]
-    map.setPaintProperty(FILL, 'fill-opacity', ['case', strong, 0.6, 0.2])
-    map.setPaintProperty(OUTLINE, 'line-opacity', ['case', strong, 1, 0.5])
-    // Real data has hundreds of zones: only those on the route get a full marker, or the map fills up.
-    map.setPaintProperty(DOTS, 'circle-radius', ['case', onRoute, 6, strong, 3, 2])
-    map.setPaintProperty(DOTS, 'circle-opacity', ['case', strong, 0.95, 0.4])
+    const always: ExpressionSpecification = ['any', underpass, onRoute, avoided]
+    markedIds.current = [...passedZoneIds, ...avoidedZoneIds]
+    // Underpasses and this route's zones are visible at every zoom, the other zones only close up.
+    map.setPaintProperty(FILL, 'fill-opacity', ['interpolate', ['linear'], ['zoom'],
+      ZONES_FROM_ZOOM, ['case', always, 0.6, 0], ZONES_FULL_ZOOM, ['case', strong, 0.6, 0.2]])
+    map.setPaintProperty(OUTLINE, 'line-opacity', ['interpolate', ['linear'], ['zoom'],
+      ZONES_FROM_ZOOM, ['case', always, 1, 0], ZONES_FULL_ZOOM, ['case', strong, 1, 0.5]])
+    map.setFilter(UNDER_DOTS, ['all', underpass, ['!', onRoute], ['!', avoided]])
+    map.setFilter(DOTS, ['any', onRoute, avoided])
+    map.setPaintProperty(DOTS, 'circle-radius', ['case', onRoute, 6, 4])
+    map.setPaintProperty(DOTS, 'circle-opacity', ['case', onRoute, 0.95, 0.5])
     map.setPaintProperty(DOTS, 'circle-stroke-width', ['case', onRoute, 1.5, 0])
-  }, [map, highlightGroups, passedZoneIds, zoneTypes])
+    // Stronger when this rain level avoids flood records, fading out as the zones themselves appear.
+    const floodAvoided = highlightGroups.some(group => group.startsWith('flood_history'))
+    map.setPaintProperty(HEAT, 'heatmap-opacity', ['interpolate', ['linear'], ['zoom'],
+      ZONES_FROM_ZOOM, floodAvoided ? 0.85 : 0.55, DOT_MAX_ZOOM, 0])
+  }, [map, highlightGroups, passedZoneIds, avoidedZoneIds, zoneTypes])
 
   const groupConfig = { zone_groups: zoneGroups }
   const shownTypes = zoneTypesWithData(zones)
@@ -174,9 +217,9 @@ export default function RiskLayer({ map, zones, zoneTypes, zoneGroups, highlight
           const coverage = typeCoverage(type, highlightGroups, groupConfig)
           return (
             <li key={type} className="flex items-center gap-2">
-              <span className="inline-block size-3 rounded-sm"
-                style={{ background: zoneTypes[type].color, opacity: coverage === 'none' ? 0.35 : 1 }} />
-              <span className={coverage === 'none' ? 'text-muted-foreground' : 'font-semibold'}>
+              {/* Shape as well as colour: an underpass is a stretch of road, a flood record a spot. */}
+              <span className={`legend-mark legend-mark-${type}`} style={{ background: zoneTypes[type].color }} />
+              <span className={coverage === 'none' ? '' : 'font-semibold'}>
                 {zoneTypes[type].label}
                 {coverage === 'all' ? ' · 회피 대상' : coverage === 'some' ? ' · 일부 회피 대상' : ''}
               </span>
@@ -184,6 +227,7 @@ export default function RiskLayer({ map, zones, zoneTypes, zoneGroups, highlight
           )
         })}
       </ul>
+      {shownTypes.has('flood_history') && <p className="mt-1">넓게 보면 색 번짐은 침수 기록 분포이며, 위험도가 아닙니다.</p>}
       {notice && <p className="mt-1 font-medium text-amber-200">{notice}</p>}
       <p className="mt-0.5 text-muted-foreground">기준일 {zones?.metadata.data_checked_at ?? '-'}</p>
     </div>

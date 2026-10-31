@@ -27,9 +27,9 @@ export default function RouteExplanation({ result }: { result: RouteResult }) {
   if (!wanted || state.kind === 'error') return null
   const ai = state.kind === 'done' && state.data.source === 'ai'
   return (
-    <div className="text-xs" aria-label="경로 설명"
+    <div className="route-explain" aria-label="경로 설명"
       aria-live="polite" data-testid="route-explanation" data-source={state.kind === 'done' ? state.data.source : ''}>
-      <p className="mb-0.5 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+      <p className="route-explain-label">
         <Sparkles className="size-3.5" />{ai ? 'AI 설명' : '경로 설명'}
       </p>
       {state.kind === 'loading' ? (
@@ -37,7 +37,7 @@ export default function RouteExplanation({ result }: { result: RouteResult }) {
           <Loader2 className="size-3.5 animate-spin" />설명을 만드는 중…
         </p>
       ) : (
-        <p className="leading-5">{state.data.text}</p>
+        <p>{state.data.text}</p>
       )}
     </div>
   )

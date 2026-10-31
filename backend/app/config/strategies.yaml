@@ -13,7 +13,7 @@ zone_types:
     label: 침수 이력
     weight: 2
     avoid_buffer_m: 20
-    color: "#ea580c"
+    color: "#f59e0b"
     entry_penalty_s: 120
     per_m_penalty_s: 1
     tiers:

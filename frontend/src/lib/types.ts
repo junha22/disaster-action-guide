@@ -62,6 +62,7 @@ export interface WeatherInfo {
   observed_at: string | null
   region?: string
   routable?: boolean
+  station?: string | null
   message: string | null
 }
 
